@@ -698,6 +698,77 @@
     return Number.isFinite(v) ? v : 100;
   }
 
+  // ---------------------------------------------------------------------
+  // COMPUTE: max allocatable hours for a resource in a given month —
+  // capacity % of that month's total working hours (Mon–Fri). This is the
+  // single formula every hours-based figure in the app derives from:
+  //   maxAllocatableHours = capacityPercent / 100 × workingHours
+  // Since capacityPercent already reflects any logged-holiday reduction
+  // (see suggestedCapForNote below) once applied, this stays correct
+  // end-to-end without needing to know about holidays itself.
+  // ---------------------------------------------------------------------
+  function maxAllocatableHours(resource, mIdx) {
+    const cap = resourceCap(resource, mIdx);
+    const hours = (STATE.months[mIdx] && STATE.months[mIdx].hours) || 0;
+    return round((cap / 100) * hours, 1);
+  }
+  function allocatedPctForResourceMonth(resourceId, mIdx) {
+    return allocsForResource(resourceId).reduce((s, a) => s + num(a.months[mIdx], 0), 0);
+  }
+  function allocatedHoursForResourceMonth(resourceId, mIdx) {
+    const hours = (STATE.months[mIdx] && STATE.months[mIdx].hours) || 0;
+    return round((allocatedPctForResourceMonth(resourceId, mIdx) / 100) * hours, 1);
+  }
+  // Same over/healthy/under classification computeUtilisation uses, exposed
+  // standalone so any other view (e.g. Allocations) can show the identical
+  // over-allocation verdict for a resource+month without recomputing the
+  // whole utilisation table.
+  function resourceMonthStatus(resource, mIdx) {
+    const cap = resourceCap(resource, mIdx);
+    if (!(cap > 0)) return null;
+    const util = round((allocatedPctForResourceMonth(resource.id, mIdx) / cap) * 100, 1);
+    return util > 100 ? "over" : util >= 70 ? "healthy" : "under";
+  }
+
+  // ---------------------------------------------------------------------
+  // COMPUTE: suggested capacity % for a logged planned/public holiday note.
+  //   suggested% = baseCapacity% × (workingDays - loggedDays) / workingDays
+  // Reduces the resource's *pre-holiday* capacity % (so a part-time
+  // person's existing reduced % is further reduced by holidays, not
+  // overwritten to assume a 100% base) — shared by the Resources-tab cell
+  // affordance and the "log holiday" modal so both always agree on the
+  // same number.
+  //
+  // "Pre-holiday" base is captured once, into the note itself
+  // (note.baseCapacity — an additive optional field on the existing
+  // capNotes JSON blob, not a schema change), at the moment the note is
+  // first saved. Deliberately NOT recomputed from the resource's *current*
+  // live capacity % on every render: once a suggestion has been applied,
+  // the live capacity already reflects the reduction, and re-deriving from
+  // it would compound (100% → 91% → 83% → 75% → … on every re-render)
+  // instead of settling once the suggestion is applied. Notes saved before
+  // this fix have no baseCapacity, so they fall back to the live capacity
+  // at read time — the same (slightly imperfect, but non-compounding for a
+  // single apply) behaviour as before.
+  // ---------------------------------------------------------------------
+  function suggestedCapForHoliday(baseCapPct, workingDays, loggedDays) {
+    const wd = num(workingDays, 0);
+    const days = num(loggedDays, 0);
+    if (!(wd > 0) || !(days > 0)) return null;
+    const frac = Math.max(0, (wd - days) / wd);
+    return clampPct(round(num(baseCapPct, 100) * frac, 0));
+  }
+  function baseCapForNote(resource, mIdx, note) {
+    const n = note !== undefined ? note : (resource.capNotes && resource.capNotes[mIdx]);
+    return n && Number.isFinite(n.baseCapacity) ? n.baseCapacity : resourceCap(resource, mIdx);
+  }
+  function suggestedCapForNote(resource, mIdx) {
+    const note = resource.capNotes && resource.capNotes[mIdx];
+    if (!note || !note.days) return null;
+    const workingDays = STATE.months[mIdx] && STATE.months[mIdx].days;
+    return suggestedCapForHoliday(baseCapForNote(resource, mIdx, note), workingDays, note.days);
+  }
+
   function projectInMonth(project, mIdx) {
     const [first, last] = MONTH_BOUNDS[mIdx];
     const okStart = !project.start || project.start <= last;
@@ -710,13 +781,11 @@
   // ---------------------------------------------------------------------
   function computeUtilisation() {
     return STATE.resources.map((r) => {
-      const allocs = allocsForResource(r.id);
       const monthly = MONTH_BOUNDS.map((_, mIdx) => {
-        const allocated = allocs.reduce((s, a) => s + num(a.months[mIdx], 0), 0);
+        const allocated = allocatedPctForResourceMonth(r.id, mIdx);
         const cap = resourceCap(r, mIdx);
         const util = cap > 0 ? round((allocated / cap) * 100, 1) : null;
-        let status = null;
-        if (util != null) status = util > 100 ? "over" : util >= 70 ? "healthy" : "under";
+        const status = util != null ? (util > 100 ? "over" : util >= 70 ? "healthy" : "under") : null;
         return { allocated, cap, util, status };
       });
       const valid = monthly.filter((m) => m.util != null);
@@ -811,15 +880,32 @@
 
   // ---------------------------------------------------------------------
   // COMPUTE: Rolling avg capacity % (months elapsed in FY so far)
+  //
+  // When called with a tableId (the Resources table, in practice), any
+  // month column currently hidden via that table's column-hide picker
+  // (HIDDEN_COLS / isColHidden — see "Column visibility" above) is left out
+  // of the average entirely, so hiding e.g. 3 of the elapsed months'
+  // columns recomputes this over just the remaining visible ones. Every
+  // other call site (XLSX export, any future non-interactive consumer)
+  // omits tableId and gets the full, view-preference-independent average —
+  // column-hide is a personal UI preference, not a data transform, so it
+  // must not leak into exports. Returns null if every candidate month is
+  // hidden (nothing left to average) — render as "—".
   // ---------------------------------------------------------------------
-  function rollingAvgCap(resource) {
+  function rollingAvgCap(resource, tableId) {
     let n;
     if (isBeforeFY()) n = 1;
     else if (isAfterFY()) n = 12;
     else n = currentMonthIndex() + 1;
     n = Math.max(1, Math.min(12, n));
-    const slice = resource.cap.slice(0, n);
-    return round(slice.reduce((s, v) => s + num(v, 100), 0) / slice.length, 1);
+    const indices = [];
+    for (let i = 0; i < n; i++) {
+      if (tableId && isColHidden(tableId, `cap${i}`)) continue;
+      indices.push(i);
+    }
+    if (!indices.length) return null;
+    const vals = indices.map((i) => num(resource.cap[i], 100));
+    return round(vals.reduce((s, v) => s + v, 0) / vals.length, 1);
   }
 
   // ---------------------------------------------------------------------
@@ -861,14 +947,62 @@
     const billableCount = STATE.projects.filter((p) => p.billable !== false).length;
     const nonBillableCount = STATE.projects.length - billableCount;
 
+    // ---- Utilisation trend — average utilisation % across every resource,
+    // for every month in the FY (not just the current one). Feeds the
+    // Dashboard's trend chart. Independent of Resources-tab column-hide
+    // state (that's scoped to Rolling avg cap% only, per spec).
+    const monthlyAvgUtil = MONTH_BOUNDS.map((_, i) => {
+      const valid = util.map((u) => u.monthly[i].util).filter((v) => v != null);
+      return valid.length ? round(valid.reduce((s, v) => s + v, 0) / valid.length, 1) : null;
+    });
+
+    // ---- Average utilisation by role — feeds the Dashboard's bar chart.
+    // Only roles with at least one resource that has a computable avgUtil
+    // are included; sorted highest-utilised first so the exec-readable
+    // story ("who's stretched thinnest") reads top-to-bottom.
+    const roleUtilMap = {};
+    util.forEach((u) => {
+      const role = u.resource.role || "Unassigned";
+      if (u.avgUtil == null) return;
+      (roleUtilMap[role] || (roleUtilMap[role] = [])).push(u.avgUtil);
+    });
+    const utilByRole = Object.entries(roleUtilMap)
+      .map(([role, vals]) => ({
+        role, count: vals.length,
+        avg: round(vals.reduce((s, v) => s + v, 0) / vals.length, 1),
+      }))
+      .sort((a, b) => b.avg - a.avg);
+
+    // ---- Billable vs non-billable, broken down by project group — feeds
+    // the Dashboard's billing panel. "Core" is deliberately excluded: it's
+    // always non-billable by definition, so including it here would just
+    // be a 0%-billable row with no signal. Feature / Implementation are the
+    // real, distinct group values in the data (see GROUP_OPTIONS) — kept
+    // as two separate rows rather than merged into one bucket, so the
+    // breakdown doesn't hide which of the two is actually driving any
+    // non-billable share. See project notes for the full reasoning.
+    const billableByGroup = GROUP_OPTIONS.filter((g) => g !== "CORE").map((g) => {
+      const projs = STATE.projects.filter((p) => p.group === g);
+      const billable = projs.filter((p) => p.billable !== false).length;
+      const total = projs.length;
+      const nonBillable = total - billable;
+      return {
+        group: g,
+        billable, nonBillable, total,
+        billablePct: total ? round((billable / total) * 100, 0) : 0,
+        nonBillablePct: total ? round((nonBillable / total) * 100, 0) : 0,
+      };
+    });
+
     return {
       mIdx,
       totalResources: STATE.resources.length,
       totalProjects: STATE.projects.length,
       totalAllocationRows: STATE.allocations.length,
+      activeProjectCount: statusCounts.Active || 0,
       statusCounts,
-      billableCount, nonBillableCount,
-      avgUtilThisMonth,
+      billableCount, nonBillableCount, billableByGroup,
+      avgUtilThisMonth, monthlyAvgUtil, utilByRole,
       over, under, healthy,
       critical, review, ok,
       summary, leave,
@@ -921,10 +1055,15 @@
   // Navigation — every dashboard link/KPI/row routes through here so
   // clicking a number always lands on the tab (and row) that explains it.
   // ---------------------------------------------------------------------
-  function goToTab({ tab, subtab, statusFilter, highlight }) {
+  function goToTab({ tab, subtab, statusFilter, highlight, projectGroupFilter, projectBillableFilter }) {
     if (tab) ACTIVE_TAB = tab;
     if (subtab) INSIGHTS_SUBTAB = subtab;
     if (statusFilter !== undefined) PROJECT_STATUS_FILTER = statusFilter;
+    // Dashboard's billable-by-group breakdown (item 3) deep-links straight
+    // into the Projects table's own column filters, same mechanism the
+    // status chips already use for the Status column.
+    if (projectGroupFilter !== undefined) setFilter(PROJ_TABLE, "group", projectGroupFilter);
+    if (projectBillableFilter !== undefined) setFilter(PROJ_TABLE, "billable", projectBillableFilter);
     render();
     if (highlight) {
       requestAnimationFrame(() => {
@@ -938,8 +1077,80 @@
   }
 
   // ---------------------------------------------------------------------
+  // Dashboard charts — hand-rolled, dependency-free (no charting library:
+  // see CSP in server/app.js, which doesn't allowlist one, and none is
+  // needed for two simple exec-facing charts). Colours reuse the exact
+  // same brand tokens/semantics as the rest of the app (over/healthy/under
+  // = red/green/blue, matching utilCellClass) so the Dashboard reads as
+  // the same product as Resources/Allocations/Insights, not a bolted-on
+  // separate tool.
+  // ---------------------------------------------------------------------
+  function utilBandClass(avg) {
+    if (avg == null) return "";
+    return avg > 100 ? "bar-over" : avg >= 70 ? "bar-healthy" : "bar-under";
+  }
+
+  // Horizontal bar chart — average utilisation % by role. Plain HTML/CSS
+  // bars (width: N%) rather than SVG: simpler, and text labels never need
+  // separate positioning logic. Capped display scale gives >100% bars a
+  // little headroom instead of clipping at the container edge.
+  function utilBarChartHtml(rows) {
+    if (!rows.length) return `<p class="muted chart-empty">No utilisation data yet — add resources and allocations.</p>`;
+    const scaleMax = Math.max(100, ...rows.map((r) => r.avg)) * 1.08;
+    return `<div class="bar-chart" role="img" aria-label="Average utilisation by role">
+      ${rows.map((r) => `
+        <div class="bar-chart-row">
+          <div class="bar-chart-label" title="${esc(r.role)}">${esc(r.role)} <span class="muted">(${r.count})</span></div>
+          <div class="bar-chart-track">
+            <div class="bar-chart-fill ${utilBandClass(r.avg)}" style="width:${clampPct((r.avg / scaleMax) * 100)}%"></div>
+            <div class="bar-chart-ref" style="left:${clampPct((100 / scaleMax) * 100)}%"></div>
+          </div>
+          <div class="bar-chart-value">${r.avg}%</div>
+        </div>`).join("")}
+      <div class="bar-chart-legend muted">Bars scaled to fit; dashed line marks 100% capacity. <span class="legend-dot bar-over"></span> over &nbsp; <span class="legend-dot bar-healthy"></span> healthy &nbsp; <span class="legend-dot bar-under"></span> under</div>
+    </div>`;
+  }
+
+  // Trend line (inline SVG) — average utilisation % across all resources,
+  // one point per FY month. A simple area+line chart with a labelled
+  // 100%-capacity reference line and the current month highlighted, so an
+  // exec can see at a glance whether utilisation is trending toward or
+  // away from full capacity across the year, not just this month's snapshot.
+  function utilTrendSvg(monthlyAvgUtil, months, curIdx) {
+    const w = 760, h = 200, padL = 8, padR = 8, padT = 16, padB = 26;
+    const innerW = w - padL - padR, innerH = h - padT - padB;
+    const vals = monthlyAvgUtil.map((v) => (v == null ? null : v));
+    const known = vals.filter((v) => v != null);
+    if (!known.length) return `<p class="muted chart-empty">No utilisation data yet — add resources and allocations.</p>`;
+    const maxV = Math.max(100, ...known) * 1.1;
+    const stepX = months.length > 1 ? innerW / (months.length - 1) : 0;
+    const yFor = (v) => padT + innerH - (v / maxV) * innerH;
+    const xFor = (i) => padL + i * stepX;
+    const pts = vals.map((v, i) => (v == null ? null : [xFor(i), yFor(v)]));
+    const knownPts = pts.filter(Boolean);
+    const linePath = knownPts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+    const areaPath = knownPts.length
+      ? linePath + ` L${knownPts[knownPts.length - 1][0].toFixed(1)},${(padT + innerH).toFixed(1)} L${knownPts[0][0].toFixed(1)},${(padT + innerH).toFixed(1)} Z`
+      : "";
+    const y100 = yFor(100).toFixed(1);
+    const dots = pts.map((p, i) => p ? `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${i === curIdx ? 4.5 : 2.5}" class="trend-dot ${i === curIdx ? "trend-dot-cur" : ""}"><title>${esc(months[i].label)}: ${vals[i]}% avg utilisation</title></circle>` : "").join("");
+    const labels = pts.map((p, i) => `<text x="${xFor(i).toFixed(1)}" y="${h - 6}" class="trend-month-label ${i === curIdx ? "cur" : ""}" text-anchor="middle">${esc(months[i].label.replace(/'\d\d$/, ""))}</text>`).join("");
+    return `<svg viewBox="0 0 ${w} ${h}" class="trend-svg" role="img" aria-label="Utilisation trend across the fiscal year">
+      <line x1="${padL}" y1="${y100}" x2="${w - padR}" y2="${y100}" class="trend-ref-line"></line>
+      <text x="${w - padR}" y="${(Number(y100) - 4).toFixed(1)}" class="trend-ref-label" text-anchor="end">100% capacity</text>
+      ${areaPath ? `<path d="${areaPath}" class="trend-area"></path>` : ""}
+      ${linePath ? `<path d="${linePath}" class="trend-line"></path>` : ""}
+      ${dots}
+      ${labels}
+    </svg>`;
+  }
+
+  // ---------------------------------------------------------------------
   // View: Dashboard
   // ---------------------------------------------------------------------
+  const GROUP_LABELS = { CORE: "Core", IMPLEMENTATION: "Implementation", FEATURE: "Feature" };
+  function groupLabel(g) { return GROUP_LABELS[g] || g; }
+
   function viewDashboard() {
     const d = computeDashboard();
     const curLabel = STATE.months[d.mIdx].label;
@@ -948,27 +1159,34 @@
     // rather than interleaved, and every row routes to the tab/row that
     // explains the number (Insights, correct sub-tab, row highlighted).
     const projectItems = [
-      ...d.critical.map((h) => ({ kind: "Critical", cls: "sev-critical", name: h.project.name, value: `${h.monthly[d.mIdx].score}%`, highlight: `proj-${h.project.id}` })),
-      ...d.review.map((h) => ({ kind: "Needs review", cls: "sev-review", name: h.project.name, value: `${h.monthly[d.mIdx].score}%`, highlight: `proj-${h.project.id}` })),
+      ...d.critical.map((h) => ({ kind: "Critical", cls: "sev-critical", icon: "⛔", name: h.project.name, value: `${h.monthly[d.mIdx].score}%`, highlight: `proj-${h.project.id}` })),
+      ...d.review.map((h) => ({ kind: "Needs review", cls: "sev-review", icon: "⚠", name: h.project.name, value: `${h.monthly[d.mIdx].score}%`, highlight: `proj-${h.project.id}` })),
     ];
     const resourceItems = [
       ...d.over.sort((a, b) => b.monthly[d.mIdx].util - a.monthly[d.mIdx].util)
-        .map((u) => ({ kind: "Over-allocated", cls: "sev-over", name: u.resource.name, value: `${u.monthly[d.mIdx].util}%`, highlight: `res-${u.resource.id}` })),
+        .map((u) => ({ kind: "Over-allocated", cls: "sev-over", icon: "🔺", name: u.resource.name, value: `${u.monthly[d.mIdx].util}%`, highlight: `res-${u.resource.id}` })),
       ...d.under.sort((a, b) => a.monthly[d.mIdx].util - b.monthly[d.mIdx].util)
-        .map((u) => ({ kind: "Under-utilised", cls: "sev-under", name: u.resource.name, value: `${u.monthly[d.mIdx].util}%`, highlight: `res-${u.resource.id}` })),
+        .map((u) => ({ kind: "Under-utilised", cls: "sev-under", icon: "🔻", name: u.resource.name, value: `${u.monthly[d.mIdx].util}%`, highlight: `res-${u.resource.id}` })),
     ];
 
+    // Needs-attention — card grid (not a plain list): each issue is its own
+    // small card with a coloured left edge + icon, matching the app's
+    // existing card/panel visual language (rounded corners, soft shadow)
+    // rather than the flatter row style this replaces.
     function renderAttnGroup(items, subtab, max) {
-      if (!items.length) return `<li class="attn-row sev-none">All clear.</li>`;
+      if (!items.length) return `<div class="attn-card sev-none">All clear.</div>`;
       const shown = items.slice(0, max);
       const hidden = items.length - shown.length;
       return shown.map((a) => `
-          <li class="attn-row ${a.cls} clickable" data-action="goto" data-tab="insights" data-subtab="${subtab}" data-highlight="${a.highlight}">
-            <span class="attn-kind">${esc(a.kind)}</span>
-            <span class="attn-name">${esc(a.name)}</span>
+          <button type="button" class="attn-card ${a.cls} clickable" data-action="goto" data-tab="insights" data-subtab="${subtab}" data-highlight="${a.highlight}">
+            <span class="attn-icon">${a.icon}</span>
+            <span class="attn-card-body">
+              <span class="attn-kind">${esc(a.kind)}</span>
+              <span class="attn-name" title="${esc(a.name)}">${esc(a.name)}</span>
+            </span>
             <b class="attn-value">${esc(a.value)}</b>
-          </li>`).join("") + (hidden > 0
-            ? `<li class="attn-row sev-more clickable" data-action="goto" data-tab="insights" data-subtab="${subtab}">+${hidden} more — see Insights</li>`
+          </button>`).join("") + (hidden > 0
+            ? `<button type="button" class="attn-card sev-more clickable" data-action="goto" data-tab="insights" data-subtab="${subtab}">+${hidden} more — see Insights</button>`
             : "");
     }
 
@@ -983,49 +1201,100 @@
 
     const leaveRows = d.leave.length
       ? d.leave.map((l) => `
-          <li class="attn-row sev-leave clickable" data-action="goto" data-tab="resources" data-highlight="res-${l.resource.id}">
-            <span class="attn-kind">${esc(l.note.type || "Leave")}</span>
-            <span class="attn-name">${esc(l.resource.name)}${l.note.days ? ` — ${esc(l.note.days)} day${l.note.days == 1 ? "" : "s"}` : ""}${l.note.note ? `<span class="muted"> · ${esc(l.note.note)}</span>` : ""}</span>
-          </li>`).join("")
-      : `<li class="attn-row sev-none">No planned or public holidays logged for ${esc(curLabel)} yet. Click the note icon (<span class="legend-dot note-dot"></span>) on any month cell in Resources to add one.</li>`;
+          <button type="button" class="attn-card sev-leave clickable" data-action="goto" data-tab="resources" data-highlight="res-${l.resource.id}">
+            <span class="attn-icon">🌴</span>
+            <span class="attn-card-body">
+              <span class="attn-kind">${esc(l.note.type || "Leave")}</span>
+              <span class="attn-name">${esc(l.resource.name)}${l.note.days ? ` — ${esc(l.note.days)} day${l.note.days == 1 ? "" : "s"}` : ""}${l.note.note ? `<span class="muted"> · ${esc(l.note.note)}</span>` : ""}</span>
+            </span>
+          </button>`).join("")
+      : `<div class="attn-card sev-none">No planned or public holidays logged for ${esc(curLabel)} yet. Click the note icon (<span class="legend-dot note-dot"></span>) on any month cell in Resources to add one.</div>`;
+
+    // Billable vs non-billable, by project group (item 3) — Core excluded
+    // (always non-billable by definition, so it carries no signal here).
+    // Each group's billable/non-billable counts are individually
+    // click-to-filter straight into the Projects table, same idiom as the
+    // status chips above.
+    const billingGroupCards = d.billableByGroup.map((g) => `
+      <div class="billing-group-card">
+        <div class="billing-group-head">${esc(groupLabel(g.group))} <span class="muted">— ${g.total} project${g.total === 1 ? "" : "s"}</span></div>
+        <div class="billing-group-bar" title="${g.billablePct}% billable · ${g.nonBillablePct}% non-billable">
+          <div class="billing-group-bar-billable" style="width:${g.billablePct}%"></div>
+          <div class="billing-group-bar-nonbillable" style="width:${g.nonBillablePct}%"></div>
+        </div>
+        <div class="kpi-chip-row">
+          <button type="button" class="kpi-chip clickable" data-action="goto" data-tab="projects" data-status-filter="All" data-project-group="${esc(g.group)}" data-project-billable="true">
+            <span class="status-pill st-billable">Billable</span><b>${g.billable}</b> <span class="muted">(${g.billablePct}%)</span>
+          </button>
+          <button type="button" class="kpi-chip clickable" data-action="goto" data-tab="projects" data-status-filter="All" data-project-group="${esc(g.group)}" data-project-billable="false">
+            <span class="status-pill st-nonbillable">Non-billable</span><b>${g.nonBillable}</b> <span class="muted">(${g.nonBillablePct}%)</span>
+          </button>
+        </div>
+      </div>`).join("");
 
     return `
       <div class="panel intro-panel">
         <h1>Resource capacity planner — AgentX team</h1>
-        <p class="muted">${esc(STATE.meta.fyLabel)} &middot; showing <b>${esc(curLabel)}</b> as the current month</p>
+        <p class="muted">${esc(STATE.meta.fyLabel)} &middot; showing <b>${esc(curLabel)}</b> as the current month &middot; ${d.totalResources} resources across ${d.totalProjects} projects</p>
       </div>
 
-      <div class="kpi-grid">
-        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="resources"><div class="kpi-label">Resources</div><div class="kpi-value">${d.totalResources}</div></button>
-        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="All"><div class="kpi-label">Projects</div><div class="kpi-value">${d.totalProjects}</div></button>
-        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="insights" data-subtab="utilisation"><div class="kpi-label">Avg utilisation</div><div class="kpi-value">${d.avgUtilThisMonth == null ? "—" : d.avgUtilThisMonth + "%"}</div></button>
-        <button type="button" class="kpi-card clickable" data-action="scroll-to" data-target="attentionPanel"><div class="kpi-label">Needs attention</div><div class="kpi-value">${projectItems.length + resourceItems.length}</div></button>
-        <button type="button" class="kpi-card clickable" data-action="scroll-to" data-target="leavePanel"><div class="kpi-label">On leave this month</div><div class="kpi-value">${d.leave.length}</div></button>
+      <div class="kpi-grid kpi-hero">
+        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="resources">
+          <div class="kpi-label">Resources</div><div class="kpi-value">${d.totalResources}</div>
+        </button>
+        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="Active">
+          <div class="kpi-label">Active projects</div><div class="kpi-value">${d.activeProjectCount}</div><div class="kpi-sub muted">of ${d.totalProjects} total</div>
+        </button>
+        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="insights" data-subtab="utilisation">
+          <div class="kpi-label">Avg utilisation</div><div class="kpi-value">${d.avgUtilThisMonth == null ? "—" : d.avgUtilThisMonth + "%"}</div><div class="kpi-sub muted">this month</div>
+        </button>
+        <button type="button" class="kpi-card clickable kpi-card-warn" data-action="goto" data-tab="insights" data-subtab="utilisation">
+          <div class="kpi-label">Over-allocated</div><div class="kpi-value">${d.over.length}</div><div class="kpi-sub muted">resources this month</div>
+        </button>
+        <button type="button" class="kpi-card clickable" data-action="scroll-to" data-target="attentionPanel">
+          <div class="kpi-label">Needs attention</div><div class="kpi-value">${projectItems.length + resourceItems.length}</div><div class="kpi-sub muted">projects + resources</div>
+        </button>
+        <button type="button" class="kpi-card clickable" data-action="scroll-to" data-target="leavePanel">
+          <div class="kpi-label">On leave this month</div><div class="kpi-value">${d.leave.length}</div>
+        </button>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel chart-panel">
+          <h2>Avg utilisation by role</h2>
+          <p class="muted">This fiscal year, averaged per resource then rolled up by role.</p>
+          ${utilBarChartHtml(d.utilByRole)}
+        </div>
+        <div class="panel chart-panel">
+          <h2>Utilisation trend — ${esc(STATE.meta.fyLabel)}</h2>
+          <p class="muted">Average utilisation % across every resource, month by month. <span class="legend-dot" style="background:var(--brand)"></span> current month.</p>
+          ${utilTrendSvg(d.monthlyAvgUtil, STATE.months, d.mIdx)}
+        </div>
       </div>
 
       <div class="panel" id="attentionPanel">
         <h2>Needs attention this month</h2>
         <div class="attn-group-label">Projects <span class="muted">(${projectItems.length})</span></div>
-        <ul class="attn-list">${renderAttnGroup(projectItems, "health", 4)}</ul>
+        <div class="attn-grid">${renderAttnGroup(projectItems, "health", 4)}</div>
         <div class="attn-group-label">Resources <span class="muted">(${resourceItems.length})</span></div>
-        <ul class="attn-list">${renderAttnGroup(resourceItems, "utilisation", 4)}</ul>
+        <div class="attn-grid">${renderAttnGroup(resourceItems, "utilisation", 4)}</div>
       </div>
 
       <div class="panel" id="leavePanel">
         <h2>Planned &amp; public holidays — ${esc(curLabel)}</h2>
-        <ul class="attn-list">${leaveRows}</ul>
+        <div class="attn-grid">${leaveRows}</div>
       </div>
 
-      <div class="panel">
-        <h2>Projects by status <span class="muted">— click to filter</span></h2>
-        <div class="kpi-chip-row">${statusChips}</div>
-      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Projects by status <span class="muted">— click to filter</span></h2>
+          <div class="kpi-chip-row">${statusChips}</div>
+        </div>
 
-      <div class="panel">
-        <h2>Projects by billing type</h2>
-        <div class="kpi-chip-row">
-          <span class="kpi-chip"><span class="status-pill st-billable">Billable</span><b>${d.billableCount}</b> <span class="muted">(${d.totalProjects ? round(d.billableCount / d.totalProjects * 100, 0) : 0}%)</span></span>
-          <span class="kpi-chip"><span class="status-pill st-nonbillable">Non-billable</span><b>${d.nonBillableCount}</b> <span class="muted">(${d.totalProjects ? round(d.nonBillableCount / d.totalProjects * 100, 0) : 0}%)</span></span>
+        <div class="panel">
+          <h2>Billable vs non-billable <span class="muted">— by group</span></h2>
+          <p class="muted">Overall: <b>${d.billableCount}</b> billable (${d.totalProjects ? round(d.billableCount / d.totalProjects * 100, 0) : 0}%) &middot; <b>${d.nonBillableCount}</b> non-billable. Core excluded below — it's always non-billable by definition, so it adds no signal to this breakdown.</p>
+          <div class="billing-group-grid">${billingGroupCards}</div>
         </div>
       </div>
     `;
@@ -1046,7 +1315,7 @@
     });
     rows = applySort(RES_TABLE, rows, {
       name: (r) => r.name, role: (r) => r.role, area: (r) => r.area,
-      rollingAvg: (r) => rollingAvgCap(r), avgUtil: (r) => utilOf(r),
+      rollingAvg: (r) => rollingAvgCap(r, RES_TABLE), avgUtil: (r) => utilOf(r),
       ...Object.fromEntries(STATE.months.map((m, i) => [`cap${i}`, (r) => num(r.cap[i], 100)])),
     });
 
@@ -1055,12 +1324,20 @@
       const u = util.find((x) => x.resource.id === r.id);
       const capCells = r.cap.map((c, i) => {
         const note = r.capNotes && r.capNotes[i];
+        const capValue = num(c, 100);
+        // Suggested capacity % from the logged holiday, only surfaced as a
+        // one-click chip while it would actually change something — once
+        // applied (or if there's no note/days), it disappears again.
+        const suggested = suggestedCapForNote(r, i);
+        const showSuggestChip = suggested != null && suggested !== capValue;
         return `<td class="${i === cur ? "cur-month" : ""} ${note ? "has-note" : ""}">
           <div class="cap-cell">
-            <input type="number" min="0" max="100" step="5" value="${num(c, 100)}"
+            <input type="number" min="0" max="100" step="5" value="${capValue}"
               data-entity="resource" data-id="${r.id}" data-field="cap" data-idx="${i}" class="cell-input">
             <button type="button" class="note-btn ${note ? "has-note" : ""}" data-action="open-holiday" data-id="${r.id}" data-idx="${i}"
               title="${note ? esc(noteTooltip(note)) : "Log planned or public holiday"}">●</button>
+            ${showSuggestChip ? `<button type="button" class="suggest-chip" data-action="apply-suggested-cap" data-id="${r.id}" data-idx="${i}" data-value="${suggested}"
+              title="${esc(note.days)} day(s) off out of ${esc(STATE.months[i].days)} working days in ${esc(STATE.months[i].label)} — suggested capacity ${suggested}% (current ${capValue}% × available days). Click to apply.">→ ${suggested}%</button>` : ""}
           </div>
         </td>`;
       }).join("");
@@ -1076,7 +1353,7 @@
             </select>
           </td>
           ${capCells}
-          <td class="readonly">${rollingAvgCap(r)}%</td>
+          <td class="readonly">${(() => { const ra = rollingAvgCap(r, RES_TABLE); return ra == null ? "—" : ra + "%"; })()}</td>
           <td class="readonly ${utilCellClass(u.avgStatus)}">${u.avgUtil == null ? "—" : u.avgUtil + "%"}</td>
           <td><button class="btn btn-danger btn-xs" data-action="delete-resource" data-id="${r.id}">Delete</button></td>
         </tr>`;
@@ -1296,10 +1573,27 @@
       const res = getResource(a.resourceId);
       const proj = getProject(a.projectId);
       const avg = round(a.months.reduce((s, v) => s + num(v, 0), 0) / 12, 0);
-      const monthCells = a.months.map((v, i) => `<td class="${allocCellClass(v)} ${i === cur ? "cur-month" : ""}">
+      // Cell colour + "remaining hrs" readout reflect this resource's total
+      // allocation across *every* project that month vs. their capacity
+      // (maxAllocatableHours = capacity% ÷ 100 × that month's working
+      // hours) — the same status computeUtilisation/the Dashboard use, so
+      // a resource whose capacity was reduced by a logged holiday shows the
+      // same over-allocation warning here, not just on the Utilisation tab.
+      const monthCells = a.months.map((v, i) => {
+        const status = res ? resourceMonthStatus(res, i) : null;
+        const cellCls = status ? utilCellClass(status) : allocCellClass(v);
+        const remainingSub = res
+          ? (() => {
+              const remaining = round(maxAllocatableHours(res, i) - allocatedHoursForResourceMonth(res.id, i), 1);
+              return `<div class="score-sub">${remaining < 0 ? `over by ${Math.abs(remaining)}h` : `${remaining}h left`}</div>`;
+            })()
+          : "";
+        return `<td class="${cellCls} ${i === cur ? "cur-month" : ""}">
           <input type="number" min="0" max="100" step="5" value="${v || ""}" placeholder="0"
             data-entity="allocation" data-id="${a.id}" data-field="month" data-idx="${i}" class="cell-input alloc-input">
-        </td>`).join("");
+          ${remainingSub}
+        </td>`;
+      }).join("");
       return `
         <tr data-row-id="alloc-${a.id}">
           <td class="sticky-col name-cell">
@@ -1334,7 +1628,7 @@
           <h2>Allocations — capacity planner (% per resource × project × month)</h2>
           <button class="btn btn-primary" data-action="add-allocation">+ Add allocation</button>
         </div>
-        <p class="muted">Enter allocation % (0–100) per month. Role fills in automatically from the Resources register, so it can never drift out of sync.</p>
+        <p class="muted">Enter allocation % (0–100) per month. Role fills in automatically from the Resources register, so it can never drift out of sync. Each cell's small subtext is that resource's remaining hours that month (capacity % × working hours, across every project they're on) — cell colour matches the same over/healthy/under-allocated verdict as the Utilisation tab, so a capacity % reduced for a logged holiday shows up here too. &nbsp; <span class="legend-dot cell-red"></span> over-allocated &nbsp; <span class="legend-dot cell-green"></span> healthy &nbsp; <span class="legend-dot cell-blue"></span> under-utilised.</p>
         <div class="table-toolbar">
           <span class="muted">Click a column header to sort. Use the boxes under the headers to filter.</span>
           <div class="table-toolbar-actions">
@@ -1912,6 +2206,8 @@
           subtab: btn.dataset.subtab,
           statusFilter: btn.dataset.statusFilter,
           highlight: btn.dataset.highlight,
+          projectGroupFilter: btn.dataset.projectGroup,
+          projectBillableFilter: btn.dataset.projectBillable,
         });
       });
     });
@@ -1934,6 +2230,12 @@
     // Resources — planned/public holiday note on a capacity cell
     view.querySelectorAll('[data-action="open-holiday"]').forEach((btn) => {
       btn.addEventListener("click", () => openHolidayModal(btn.dataset.id, parseInt(btn.dataset.idx, 10)));
+    });
+
+    // Resources — one-click "apply suggested capacity %" chip shown right
+    // on the cell for any month with a logged holiday (see suggestedCapForNote).
+    view.querySelectorAll('[data-action="apply-suggested-cap"]').forEach((btn) => {
+      btn.addEventListener("click", () => applySuggestedCap(btn.dataset.id, parseInt(btn.dataset.idx, 10), num(btn.dataset.value, 100)));
     });
 
     // Inline cell edits. Only SELECT/date fire one "change" per commit, so
@@ -1999,6 +2301,25 @@
     view.querySelectorAll('[data-action="remove-user"]').forEach((b) => b.addEventListener("click", () => removeUser(b.dataset.id)));
   }
 
+  // Applies a suggested capacity % to a resource's month cell — shared by
+  // the one-click chip on the Resources table cell and the "Use this"
+  // button inside the holiday modal, so both go through the exact same
+  // PATCH /api/resources/:id call (field: "cap") the manual capacity-cell
+  // edit uses. That means it's audit-logged identically to a manual edit
+  // (see server/routes/resources.js), and every downstream calculation
+  // (Utilisation, Dashboard, Allocations) picks it up immediately since
+  // they all read the resource's cap[] array live.
+  async function applySuggestedCap(resourceId, idx, value) {
+    try {
+      const updated = await apiPatch(`/resources/${resourceId}`, { field: "cap", idx, value: clampPct(value) });
+      Object.assign(getResource(resourceId), updated);
+      await refreshDataTabCaches();
+    } catch (err) {
+      alert("Couldn't apply suggested capacity: " + err.message);
+      throw err;
+    }
+  }
+
   // ---------------------------------------------------------------------
   // Planned / public holiday capture — a small modal anchored to a single
   // capacity cell, so leave can be logged without adding a new column.
@@ -2010,6 +2331,11 @@
     const existing = r.capNotes[idx];
     const workingDays = STATE.months[idx].days;
     const monthLabel = STATE.months[idx].label;
+    // Captured once when the modal opens (see suggestedCapForNote's
+    // comment for why): the "pre-holiday" capacity % to compute
+    // suggestions off, so re-opening this modal or tweaking the day count
+    // never compounds a previously-applied suggestion.
+    const baseCapacity = baseCapForNote(r, idx, existing);
 
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
@@ -2043,17 +2369,22 @@
     function updateSuggestion() {
       const days = num(overlay.querySelector("#hnDays").value, 0);
       const suggestEl = overlay.querySelector("#hnSuggest");
-      if (days > 0) {
-        const suggested = Math.max(0, round(100 * (1 - days / Math.max(1, workingDays)), 0));
-        suggestEl.innerHTML = `Suggested capacity for ${esc(monthLabel)} based on days off: <b>${suggested}%</b> <button type="button" class="btn btn-secondary btn-xs" id="hnApply">Use this</button>`;
+      // Reduces this resource's pre-holiday capacity % (not a flat 100%
+      // base, and not the live capacity % which may already reflect a
+      // previously-applied suggestion) by the fraction of working days
+      // logged as leave — same formula, and the same shared helper, as the
+      // one-click chip on the Resources table cell (see suggestedCapForNote
+      // / suggestedCapForHoliday), so a part-time person's existing reduced
+      // % is further reduced by holidays rather than being overwritten.
+      const suggested = suggestedCapForHoliday(baseCapacity, workingDays, days);
+      if (suggested != null) {
+        suggestEl.innerHTML = `Suggested capacity for ${esc(monthLabel)} — ${esc(r.name)}'s ${baseCapacity}% capacity × ${workingDays - days}/${workingDays} available working days: <b>${suggested}%</b> <button type="button" class="btn btn-secondary btn-xs" id="hnApply">Use this</button>`;
         overlay.querySelector("#hnApply").addEventListener("click", async () => {
           try {
-            const updated = await apiPatch(`/resources/${r.id}`, { field: "cap", idx, value: clampPct(suggested) });
-            Object.assign(getResource(r.id), updated);
+            await applySuggestedCap(r.id, idx, suggested);
             suggestEl.innerHTML += ' <span class="txt-green">✓ applied</span>';
-            await refreshDataTabCaches();
           } catch (err) {
-            alert("Couldn't apply suggested capacity: " + err.message);
+            // applySuggestedCap already alerted; nothing further to do here.
           }
         });
       } else {
@@ -2080,7 +2411,10 @@
       const type = overlay.querySelector("#hnType").value;
       const days = overlay.querySelector("#hnDays").value;
       const note = overlay.querySelector("#hnNote").value.trim();
-      const next = (!days && !note) ? null : { type, days: days ? num(days, 0) : null, note };
+      // Freeze the pre-holiday base capacity into the note itself (only
+      // meaningful once days off are logged) so the suggested % this note
+      // implies stays stable — see the big comment on suggestedCapForHoliday.
+      const next = (!days && !note) ? null : { type, days: days ? num(days, 0) : null, note, baseCapacity: days ? baseCapacity : null };
       try {
         const updated = await apiPatch(`/resources/${r.id}`, { field: "capNote", idx, note: next });
         Object.assign(getResource(r.id), updated);

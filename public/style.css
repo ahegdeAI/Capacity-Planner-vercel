@@ -112,6 +112,13 @@ main#view {
 .kpi-card.clickable:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(38, 71, 107, 0.14); }
 .kpi-label { font-family: var(--font-sub); font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
 .kpi-value { font-size: 27px; font-weight: 700; margin-top: 4px; color: var(--navy-deep); }
+.kpi-sub { font-size: 11px; margin-top: 2px; }
+/* Dashboard hero row — headline KPIs, exec-skim first. Over-allocated gets
+   an amber top border instead of the default green, so the one metric that
+   usually signals a problem reads as "attention" at a glance, same
+   semantics as .cell-amber/.sev-review elsewhere. */
+.kpi-hero .kpi-card-warn { border-top-color: var(--amber); }
+.kpi-hero .kpi-card-warn .kpi-value { color: var(--amber); }
 
 .kpi-chip-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .kpi-chip {
@@ -146,6 +153,76 @@ main#view {
 .attn-row.clickable:hover { filter: brightness(0.97); transform: translateX(2px); }
 .attn-group-label { font-family: var(--font-sub); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--navy); margin: 14px 0 6px; }
 .attn-group-label:first-of-type { margin-top: 0; }
+
+/* Needs-attention / leave — card grid (Dashboard redesign). Same colour
+   semantics as .attn-row above (kept for any other consumer), presented as
+   a responsive grid of small cards with an icon + coloured left edge,
+   rather than a single-column list, so it reads as a scannable panel of
+   the app's existing card language, not a plain list. */
+.attn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; margin: 0; padding: 0; }
+.attn-card {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px;
+  background: var(--bg); border: 1px solid var(--border); border-left: 4px solid var(--border);
+  box-shadow: 0 1px 2px rgba(38, 71, 107, 0.05);
+  font-family: inherit; text-align: left; width: 100%; margin: 0;
+}
+.attn-icon { font-size: 15px; line-height: 1; flex-shrink: 0; }
+.attn-card-body { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.attn-card .attn-kind { font-family: var(--font-sub); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+.attn-card .attn-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attn-card .attn-value { font-size: 14px; flex-shrink: 0; }
+.attn-card.sev-critical { border-left-color: var(--red); background: var(--red-bg); }
+.attn-card.sev-critical .attn-value { color: var(--red); }
+.attn-card.sev-over { border-left-color: var(--red); background: var(--red-bg); }
+.attn-card.sev-over .attn-value { color: var(--red); }
+.attn-card.sev-review { border-left-color: var(--amber); background: var(--amber-bg); }
+.attn-card.sev-review .attn-value { color: var(--amber); }
+.attn-card.sev-under { border-left-color: var(--brand); background: var(--blue-bg); }
+.attn-card.sev-under .attn-value { color: var(--brand-dark); }
+.attn-card.sev-none { border-left-color: var(--accent); background: var(--accent-bg); grid-column: 1 / -1; }
+.attn-card.sev-more { border-left-color: var(--border); background: transparent; color: var(--muted); font-size: 12.5px; font-style: italic; justify-content: center; box-shadow: none; }
+.attn-card.sev-leave { border-left-color: var(--teal); background: var(--teal-bg); }
+.attn-card.clickable { cursor: pointer; transition: filter 0.12s, transform 0.12s; }
+.attn-card.clickable:hover { filter: brightness(0.97); transform: translateY(-1px); }
+
+/* Dashboard charts */
+.chart-panel h2 { margin-bottom: 2px; }
+.chart-empty { padding: 24px 0; text-align: center; }
+
+.bar-chart { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.bar-chart-row { display: grid; grid-template-columns: 130px 1fr 44px; align-items: center; gap: 10px; }
+.bar-chart-label { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-chart-track { position: relative; height: 14px; background: var(--bg); border-radius: 999px; overflow: hidden; }
+.bar-chart-fill { height: 100%; border-radius: 999px; transition: width 0.2s; }
+.bar-chart-fill.bar-over { background: var(--red); }
+.bar-chart-fill.bar-healthy { background: var(--accent); }
+.bar-chart-fill.bar-under { background: var(--brand); }
+.bar-chart-ref { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 2px dashed rgba(38,71,107,0.35); }
+.bar-chart-value { font-size: 12.5px; font-weight: 700; text-align: right; color: var(--navy-deep); }
+.bar-chart-legend { font-size: 11px; margin-top: 4px; }
+.legend-dot.bar-over { background: var(--red); }
+.legend-dot.bar-healthy { background: var(--accent); }
+.legend-dot.bar-under { background: var(--brand); }
+
+.trend-svg { width: 100%; height: auto; display: block; margin-top: 6px; }
+.trend-area { fill: var(--brand-light); }
+.trend-line { fill: none; stroke: var(--brand-dark); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.trend-dot { fill: var(--brand-dark); }
+.trend-dot-cur { fill: var(--navy-deep); stroke: white; stroke-width: 1.5; }
+.trend-ref-line { stroke: var(--amber); stroke-width: 1; stroke-dasharray: 4 3; }
+.trend-ref-label { font-size: 9px; fill: var(--amber); font-family: var(--font-sub); }
+.trend-month-label { font-size: 9px; fill: var(--muted); font-family: var(--font-sub); }
+.trend-month-label.cur { fill: var(--navy-deep); font-weight: 700; }
+
+/* Billable/non-billable by group (Dashboard) */
+.billing-group-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+.billing-group-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.billing-group-head { font-weight: 700; font-size: 13px; color: var(--navy-deep); margin-bottom: 6px; }
+.billing-group-bar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: var(--border); margin-bottom: 8px; }
+.billing-group-bar-billable { height: 100%; background: var(--teal); }
+.billing-group-bar-nonbillable { height: 100%; background: #b9c2c4; }
+.billing-group-card .kpi-chip-row { gap: 6px; }
+.billing-group-card .kpi-chip { padding: 4px 9px; font-size: 12px; }
 
 @keyframes rowFlash { 0%, 60% { background: var(--brand-light); } 100% { background: transparent; } }
 tr.flash td { animation: rowFlash 2s ease-out; }
@@ -262,8 +339,28 @@ table.grid-table td:has(.cap-cell), table.grid-table th.sortable:has(.th-sub) { 
 }
 .note-btn:hover { opacity: 1; background: var(--bg); }
 .note-btn.has-note { opacity: 1; color: var(--amber); background: var(--amber-bg); }
-td.has-note { box-shadow: inset 0 0 0 2px var(--amber); }
+/* Logged-holiday month cell — a real amber fill (matching the same
+   --amber-bg fill used everywhere else in the app for "highlighted in
+   amber": .cell-amber, .st-hold, .pr-medium, .badge-r, .sev-review, …)
+   rather than an inset box-shadow border alone. A box-shadow-only outline
+   on a <td> inside a `border-collapse: collapse` table gets painted under
+   the neighbouring cells' collapsed borders in most browsers, so it read
+   as "basically invisible" even though the class was applied correctly —
+   this is the fix for that. The border is kept as a secondary accent now
+   that the fill makes the cell unmistakably highlighted. */
+td.has-note { background: var(--amber-bg) !important; box-shadow: inset 0 0 0 2px var(--amber); position: relative; z-index: 1; }
 .legend-dot.note-dot { background: var(--amber); border-radius: 50%; }
+
+/* Resources — one-click "apply suggested capacity %" chip, shown on a
+   month cell once a holiday note with days-off is logged and the
+   suggested capacity differs from what's currently set. Sits under the
+   number input inside the same relatively-positioned .cap-cell. */
+.suggest-chip {
+  display: block; width: 100%; margin-top: 2px; border: none; border-radius: 4px;
+  background: var(--amber); color: #fff; font-size: 10px; font-weight: 700;
+  padding: 2px 4px; cursor: pointer; line-height: 1.3;
+}
+.suggest-chip:hover { filter: brightness(0.9); }
 
 /* Projects — status filter chips */
 .filter-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
