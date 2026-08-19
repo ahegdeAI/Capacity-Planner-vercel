@@ -23,9 +23,12 @@ async function seedIfEmpty() {
       );
     }
     for (const p of seed.projects) {
+      // Note: seed-data.json still has an `area` field on each project
+      // object (harmless leftover from before Area/Type was removed from
+      // Projects) -- it's intentionally not read here anymore.
       await tx.run(
-        `INSERT INTO projects (id, name, group_name, area, status, priority, start_date, end_date, notes, roles, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [p.id, p.name, p.group, p.area, p.status, p.priority, p.start || null, p.end || null, p.notes || "", JSON.stringify(p.roles || {}), ts, ts]
+        `INSERT INTO projects (id, name, group_name, status, priority, start_date, end_date, notes, roles, billable, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [p.id, p.name, p.group, p.status, p.priority, p.start || null, p.end || null, p.notes || "", JSON.stringify(p.roles || {}), p.billable === false ? false : true, ts, ts]
       );
     }
     for (const a of seed.allocations) {
@@ -60,7 +63,7 @@ async function seedIfEmpty() {
     // build it directly from the seed data rather than re-querying.
     const snapshot = {
       resources: seed.resources.map((r) => ({ id: r.id, name: r.name, role: r.role, area: r.area, cap: r.cap, capNotes: r.capNotes || new Array(12).fill(null) })),
-      projects: seed.projects.map((p) => ({ id: p.id, name: p.name, group: p.group, area: p.area, status: p.status, priority: p.priority, start: p.start || null, end: p.end || null, notes: p.notes || "", roles: p.roles || {} })),
+      projects: seed.projects.map((p) => ({ id: p.id, name: p.name, group: p.group, status: p.status, priority: p.priority, start: p.start || null, end: p.end || null, notes: p.notes || "", roles: p.roles || {}, billable: p.billable === false ? false : true })),
       allocations: seed.allocations.map((a) => ({ id: a.id, resourceId: a.resourceId, projectId: a.projectId, months: a.months })),
     };
     await tx.run(
@@ -91,9 +94,15 @@ function rowToResource(row) {
 }
 function rowToProject(row) {
   return {
-    id: row.id, name: row.name, group: row.group_name, area: row.area, status: row.status,
+    id: row.id, name: row.name, group: row.group_name, status: row.status,
     priority: row.priority, start: row.start_date, end: row.end_date, notes: row.notes,
     roles: JSON.parse(row.roles),
+    // Default true (Billable) for any row that predates this column —
+    // matches how the org has presumably been treating all projects until
+    // now. In practice the DB-level NOT NULL DEFAULT true (see db.js's
+    // migration) means row.billable is never actually null/undefined, but
+    // this stays defensive in case of e.g. hand-edited data.
+    billable: row.billable === false ? false : true,
   };
 }
 function rowToAllocation(row) {

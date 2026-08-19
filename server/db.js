@@ -87,6 +87,12 @@ const SCHEMA_SQL = `
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     group_name TEXT,
+    -- "area" (displayed in the UI as "Area/Type") was removed as a
+    -- project concept. Per this app's additive-only migration philosophy
+    -- (see the "billable" migration note below), the column itself is
+    -- intentionally left in place rather than dropped -- it is harmless,
+    -- unused leftover schema. Nothing in the app reads or writes it
+    -- anymore; do not resurrect it without adding a fresh column instead.
     area TEXT,
     status TEXT,
     priority TEXT,
@@ -94,9 +100,26 @@ const SCHEMA_SQL = `
     end_date TEXT,
     notes TEXT,
     roles TEXT NOT NULL,
+    billable BOOLEAN NOT NULL DEFAULT true,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  -- Safe-upgrade migration pattern: additive-only, idempotent DDL that runs
+  -- on every cold start (see ensureInit() below). "billable" was added
+  -- after this app already had projects in production, so a brand-new
+  -- CREATE TABLE (above) already includes the column, but any
+  -- already-existing projects table (from before this feature shipped)
+  -- won't have it yet. ADD COLUMN IF NOT EXISTS ... DEFAULT true is a
+  -- no-op against a table that already has the column (fresh installs),
+  -- and against a table that doesn't, Postgres adds it and backfills the
+  -- default into every existing row automatically -- no data is touched or
+  -- lost, no manual DB intervention needed, and running this statement
+  -- again on the next cold start (or every cold start, forever) is a safe
+  -- no-op once the column exists. Future additive schema changes should
+  -- follow this same pattern rather than hand-rolling information_schema
+  -- checks.
+  ALTER TABLE projects ADD COLUMN IF NOT EXISTS billable BOOLEAN NOT NULL DEFAULT true;
 
   CREATE TABLE IF NOT EXISTS allocations (
     id TEXT PRIMARY KEY,

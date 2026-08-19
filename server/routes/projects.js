@@ -8,13 +8,17 @@ const { rowToProject } = require("../seed");
 const router = express.Router();
 router.use(requireAuth);
 
-const FIELD_LABELS = { name: "Name", group: "Group", area: "Area/Type", status: "Status", priority: "Priority", start: "Start date", end: "End date", notes: "Notes" };
+const FIELD_LABELS = { name: "Name", group: "Group", status: "Status", priority: "Priority", start: "Start date", end: "End date", notes: "Notes" };
+
+// "Billable"/"Non-billable" are the readable audit-log labels for the
+// underlying boolean — resolved here rather than logging raw true/false.
+function billableLabel(v) { return v ? "Billable" : "Non-billable"; }
 
 async function persist(p) {
   const now = new Date().toISOString();
   await db.run(
-    `UPDATE projects SET name=$1, group_name=$2, area=$3, status=$4, priority=$5, start_date=$6, end_date=$7, notes=$8, roles=$9, updated_at=$10 WHERE id=$11`,
-    [p.name, p.group, p.area, p.status, p.priority, p.start || null, p.end || null, p.notes || "", JSON.stringify(p.roles || {}), now, p.id]
+    `UPDATE projects SET name=$1, group_name=$2, status=$3, priority=$4, start_date=$5, end_date=$6, notes=$7, roles=$8, billable=$9, updated_at=$10 WHERE id=$11`,
+    [p.name, p.group, p.status, p.priority, p.start || null, p.end || null, p.notes || "", JSON.stringify(p.roles || {}), p.billable !== false, now, p.id]
   );
 }
 
@@ -23,8 +27,8 @@ router.post("/", async (req, res) => {
   const now = new Date().toISOString();
   const name = (req.body || {}).name || "New project";
   await db.run(
-    `INSERT INTO projects (id, name, group_name, area, status, priority, start_date, end_date, notes, roles, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-    [id, name, "CORE", "Engineering", "Pipeline", "Medium", null, null, "", "{}", now, now]
+    `INSERT INTO projects (id, name, group_name, status, priority, start_date, end_date, notes, roles, billable, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [id, name, "CORE", "Pipeline", "Medium", null, null, "", "{}", true, now, now]
   );
   await logAudit({ action: "create", entity: "project", entityId: id, entityName: name, userEmail: req.user.email, userName: req.user.displayName });
   res.json(rowToProject(await db.get("SELECT * FROM projects WHERE id = $1", [id])));
@@ -40,6 +44,11 @@ router.patch("/:id", async (req, res) => {
   if (field === "role") {
     oldValue = p.roles[role] || ""; p.roles[role] = value; newValue = value;
     fieldLabel = `Required % — ${role}`;
+  } else if (field === "billable") {
+    oldValue = billableLabel(p.billable);
+    p.billable = value === true || value === "true";
+    newValue = billableLabel(p.billable);
+    fieldLabel = "Billable";
   } else if (FIELD_LABELS[field]) {
     oldValue = p[field]; p[field] = value; newValue = value;
     fieldLabel = FIELD_LABELS[field];

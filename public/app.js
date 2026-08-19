@@ -21,6 +21,15 @@
   const PRIORITY_OPTIONS = ["Low", "Medium", "High"];
   const GROUP_OPTIONS = ["CORE", "IMPLEMENTATION", "FEATURE"];
   const AREA_OPTIONS = ["Engineering", "Implementation", "Product"];
+  // Billable is stored as a real boolean server-side; the select/filter
+  // widgets work with the string form of that boolean ("true"/"false"),
+  // same as every other <select> value, and this pairs each with its
+  // readable label.
+  const BILLABLE_OPTIONS = [
+    { value: "true", label: "Billable" },
+    { value: "false", label: "Non-billable" },
+  ];
+  function billableLabel(v) { return v ? "Billable" : "Non-billable"; }
 
   // ---- live in-memory state, hydrated from the server on login/boot ------
   let STATE = null;
@@ -849,12 +858,16 @@
     const statusCounts = {};
     STATE.projects.forEach((p) => { statusCounts[p.status] = (statusCounts[p.status] || 0) + 1; });
 
+    const billableCount = STATE.projects.filter((p) => p.billable !== false).length;
+    const nonBillableCount = STATE.projects.length - billableCount;
+
     return {
       mIdx,
       totalResources: STATE.resources.length,
       totalProjects: STATE.projects.length,
       totalAllocationRows: STATE.allocations.length,
       statusCounts,
+      billableCount, nonBillableCount,
       avgUtilThisMonth,
       over, under, healthy,
       critical, review, ok,
@@ -1007,6 +1020,14 @@
         <h2>Projects by status <span class="muted">— click to filter</span></h2>
         <div class="kpi-chip-row">${statusChips}</div>
       </div>
+
+      <div class="panel">
+        <h2>Projects by billing type</h2>
+        <div class="kpi-chip-row">
+          <span class="kpi-chip"><span class="status-pill st-billable">Billable</span><b>${d.billableCount}</b> <span class="muted">(${d.totalProjects ? round(d.billableCount / d.totalProjects * 100, 0) : 0}%)</span></span>
+          <span class="kpi-chip"><span class="status-pill st-nonbillable">Non-billable</span><b>${d.nonBillableCount}</b> <span class="muted">(${d.totalProjects ? round(d.nonBillableCount / d.totalProjects * 100, 0) : 0}%)</span></span>
+        </div>
+      </div>
     `;
   }
 
@@ -1127,14 +1148,15 @@
     let filtered = applyFilters(PROJ_TABLE, STATE.projects, {
       name: (p, v) => contains(p.name, v),
       group: (p, v) => p.group === v,
-      area: (p, v) => p.area === v,
       status: (p, v) => p.status === v,
       priority: (p, v) => p.priority === v,
+      billable: (p, v) => String(p.billable !== false) === v,
       notes: (p, v) => contains(p.notes, v),
     });
     filtered = applySort(PROJ_TABLE, filtered, {
-      name: (p) => p.name, group: (p) => p.group, area: (p) => p.area, status: (p) => p.status,
+      name: (p) => p.name, group: (p) => p.group, status: (p) => p.status,
       priority: (p) => ({ Low: 0, Medium: 1, High: 2 }[p.priority] ?? -1),
+      billable: (p) => (p.billable !== false ? 1 : 0),
       start: (p) => p.start || "", end: (p) => p.end || "",
       budgetDays: (p) => { const d = networkDays(p.start, p.end); return d === "" ? -1 : d; },
       ...Object.fromEntries(STATE.roles.map((role) => [`role:${role}`, (p) => num(p.roles[role], -1)])),
@@ -1164,11 +1186,6 @@
             </select>
           </td>
           <td>
-            <select data-entity="project" data-id="${p.id}" data-field="area" class="cell-input">
-              ${AREA_OPTIONS.map((a) => `<option value="${esc(a)}" ${a === p.area ? "selected" : ""}>${esc(a)}</option>`).join("")}
-            </select>
-          </td>
-          <td>
             <select data-entity="project" data-id="${p.id}" data-field="status" class="cell-input">
               ${STATUS_OPTIONS.map((s) => `<option value="${s}" ${s === p.status ? "selected" : ""}>${s}</option>`).join("")}
             </select>
@@ -1176,6 +1193,11 @@
           <td>
             <select data-entity="project" data-id="${p.id}" data-field="priority" class="cell-input">
               ${PRIORITY_OPTIONS.map((pr) => `<option value="${pr}" ${pr === p.priority ? "selected" : ""}>${pr}</option>`).join("")}
+            </select>
+          </td>
+          <td>
+            <select data-entity="project" data-id="${p.id}" data-field="billable" class="cell-input">
+              ${BILLABLE_OPTIONS.map((o) => `<option value="${o.value}" ${o.value === String(p.billable !== false) ? "selected" : ""}>${o.label}</option>`).join("")}
             </select>
           </td>
           <td><input type="date" value="${p.start || ""}" data-entity="project" data-id="${p.id}" data-field="start" class="cell-input"></td>
@@ -1196,9 +1218,9 @@
     const projColumns = [
       { key: "name", label: "Project", hideable: false },
       { key: "group", label: "Group", hideable: true },
-      { key: "area", label: "Area/Type", hideable: true },
       { key: "status", label: "Status", hideable: true },
       { key: "priority", label: "Priority", hideable: true },
+      { key: "billable", label: "Billable", hideable: true },
       { key: "start", label: "Start", hideable: true },
       { key: "end", label: "End", hideable: true },
       { key: "budgetDays", label: "Budget days", hideable: true },
@@ -1228,7 +1250,8 @@
             ${colGroupHtml(PROJ_TABLE, projColumns)}
             <thead>
               <tr>
-                ${thSort(PROJ_TABLE, "name", "Project", "sticky-col")}${thSort(PROJ_TABLE, "group", "Group")}${thSort(PROJ_TABLE, "area", "Area/Type")}${thSort(PROJ_TABLE, "status", "Status")}${thSort(PROJ_TABLE, "priority", "Priority")}
+                ${thSort(PROJ_TABLE, "name", "Project", "sticky-col")}${thSort(PROJ_TABLE, "group", "Group")}${thSort(PROJ_TABLE, "status", "Status")}${thSort(PROJ_TABLE, "priority", "Priority")}
+                ${thSort(PROJ_TABLE, "billable", "Billable")}
                 ${thSort(PROJ_TABLE, "start", "Start")}${thSort(PROJ_TABLE, "end", "End")}${thSort(PROJ_TABLE, "budgetDays", "Budget days")}<th>Notes</th>
                 ${STATE.roles.map((r) => thSort(PROJ_TABLE, `role:${r}`, r, "role-head")).join("")}
                 <th>Validation</th><th></th>
@@ -1236,9 +1259,9 @@
               <tr class="filter-row-cells">
                 <td class="sticky-col">${filterTextInput(PROJ_TABLE, "name", "Filter project…")}</td>
                 <td>${filterSelectInput(PROJ_TABLE, "group", GROUP_OPTIONS)}</td>
-                <td>${filterSelectInput(PROJ_TABLE, "area", AREA_OPTIONS)}</td>
                 <td>${filterSelectInput(PROJ_TABLE, "status", STATUS_OPTIONS)}</td>
                 <td>${filterSelectInput(PROJ_TABLE, "priority", PRIORITY_OPTIONS)}</td>
+                <td>${filterSelectInputLabeled(PROJ_TABLE, "billable", BILLABLE_OPTIONS, "All")}</td>
                 <td></td><td></td><td></td>
                 <td>${filterTextInput(PROJ_TABLE, "notes", "Filter notes…")}</td>
                 <td colspan="${STATE.roles.length + 2}"></td>
@@ -1290,7 +1313,6 @@
               ${STATE.projects.map((p) => `<option value="${p.id}" ${p.id === a.projectId ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
             </select>
           </td>
-          <td class="readonly">${proj ? esc(proj.area) : "—"}</td>
           ${monthCells}
           <td class="readonly">${avg}%</td>
           <td><button class="btn btn-danger btn-xs" data-action="delete-allocation" data-id="${a.id}">Delete</button></td>
@@ -1301,7 +1323,6 @@
       { key: "resourceName", label: "Resource", hideable: false },
       { key: "role", label: "Role (auto)", hideable: true },
       { key: "projectName", label: "Project", hideable: true },
-      { key: "area", label: "Area (auto)", hideable: true },
       ...STATE.months.map((m, i) => ({ key: `m${i}`, label: m.label, hideable: true })),
       { key: "avg", label: "Avg %", hideable: true },
       { key: "_actions", label: "", hideable: false },
@@ -1313,7 +1334,7 @@
           <h2>Allocations — capacity planner (% per resource × project × month)</h2>
           <button class="btn btn-primary" data-action="add-allocation">+ Add allocation</button>
         </div>
-        <p class="muted">Enter allocation % (0–100) per month. Role and Area fill in automatically from the Resources / Projects registers, so they can never drift out of sync.</p>
+        <p class="muted">Enter allocation % (0–100) per month. Role fills in automatically from the Resources register, so it can never drift out of sync.</p>
         <div class="table-toolbar">
           <span class="muted">Click a column header to sort. Use the boxes under the headers to filter.</span>
           <div class="table-toolbar-actions">
@@ -1326,7 +1347,7 @@
             ${colGroupHtml(ALLOC_TABLE, allocColumns)}
             <thead>
               <tr>
-                ${thSort(ALLOC_TABLE, "resourceName", "Resource", "sticky-col")}<th>Role (auto)</th>${thSort(ALLOC_TABLE, "projectName", "Project")}<th>Area (auto)</th>
+                ${thSort(ALLOC_TABLE, "resourceName", "Resource", "sticky-col")}<th>Role (auto)</th>${thSort(ALLOC_TABLE, "projectName", "Project")}
                 ${monthSortHeaderCells(ALLOC_TABLE, "m")}
                 ${thSort(ALLOC_TABLE, "avg", "Avg %")}<th></th>
               </tr>
@@ -1334,7 +1355,6 @@
                 <td class="sticky-col">${filterSelectInputLabeled(ALLOC_TABLE, "resourceId", STATE.resources.map((r) => ({ value: r.id, label: r.name })), "All resources")}</td>
                 <td></td>
                 <td>${filterSelectInputLabeled(ALLOC_TABLE, "projectId", STATE.projects.map((p) => ({ value: p.id, label: p.name })), "All projects")}</td>
-                <td></td>
                 <td colspan="${STATE.months.length + 2}"></td>
               </tr>
             </thead>
@@ -2107,9 +2127,9 @@
       if (!p) return;
       if (field === "name") p.name = el.value;
       else if (field === "group") p.group = el.value;
-      else if (field === "area") p.area = el.value;
       else if (field === "status") p.status = el.value;
       else if (field === "priority") p.priority = el.value;
+      else if (field === "billable") p.billable = el.value === "true";
       else if (field === "start") p.start = el.value || null;
       else if (field === "end") p.end = el.value || null;
       else if (field === "notes") {
@@ -2324,18 +2344,18 @@
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resSheet), "Resources");
 
-    const projSheet = [["#", "Name", "Group", "Area", "Status", "Priority", "Start", "End", "Budget Days", "Notes", ...STATE.roles]];
+    const projSheet = [["#", "Name", "Group", "Status", "Priority", "Start", "End", "Budget Days", "Notes", ...STATE.roles]];
     STATE.projects.forEach((p, i) => projSheet.push([
-      i + 1, p.name, p.group, p.area, p.status, p.priority, p.start || "", p.end || "",
+      i + 1, p.name, p.group, p.status, p.priority, p.start || "", p.end || "",
       networkDays(p.start, p.end), p.notes, ...STATE.roles.map((r) => p.roles[r] || ""),
     ]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(projSheet), "Projects");
 
-    const allocSheet = [["Resource", "Role", "Project", "Area", ...monthLabels, "Avg%"]];
+    const allocSheet = [["Resource", "Role", "Project", ...monthLabels, "Avg%"]];
     STATE.allocations.forEach((a) => {
       const res = getResource(a.resourceId), proj = getProject(a.projectId);
       const avg = round(a.months.reduce((s, v) => s + num(v, 0), 0) / 12, 0);
-      allocSheet.push([res ? res.name : "", res ? res.role : "", proj ? proj.name : "", proj ? proj.area : "", ...a.months, avg]);
+      allocSheet.push([res ? res.name : "", res ? res.role : "", proj ? proj.name : "", ...a.months, avg]);
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(allocSheet), "Capacity Planner");
 

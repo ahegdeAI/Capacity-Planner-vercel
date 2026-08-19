@@ -231,6 +231,8 @@ input[type="date"].cell-input { min-width: 120px; }
 .st-pipeline { background: #ececec; color: #666; }
 .st-hold { background: var(--amber-bg); color: var(--amber); }
 .st-completed { background: var(--teal-bg); color: var(--teal); }
+.st-billable { background: var(--teal-bg); color: var(--teal); }
+.st-nonbillable { background: #ececec; color: #666; }
 .pr-high { background: var(--red-bg); color: var(--red); }
 .pr-medium { background: var(--amber-bg); color: var(--amber); }
 .pr-low { background: #eee; color: #666; }

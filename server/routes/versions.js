@@ -56,9 +56,13 @@ router.post("/:id/restore", async (req, res) => {
       );
     }
     for (const p of snapshot.projects) {
+      // Older version snapshots (saved before Area/Type was removed from
+      // Projects) may still carry a `p.area` field — intentionally
+      // ignored here (see server/db.js: the `area` column stays in the
+      // schema, unused).
       await tx.run(
-        `INSERT INTO projects (id, name, group_name, area, status, priority, start_date, end_date, notes, roles, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [p.id, p.name, p.group, p.area, p.status, p.priority, p.start || null, p.end || null, p.notes || "", JSON.stringify(p.roles || {}), now, now]
+        `INSERT INTO projects (id, name, group_name, status, priority, start_date, end_date, notes, roles, billable, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [p.id, p.name, p.group, p.status, p.priority, p.start || null, p.end || null, p.notes || "", JSON.stringify(p.roles || {}), p.billable !== false, now, now]
       );
     }
     for (const a of snapshot.allocations) {
