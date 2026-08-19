@@ -1,0 +1,6 @@
+node_modules/
+data/mail-outbox.log
+.env
+qa-screenshots/
+qa-screenshots-vercel/
+.vercel/

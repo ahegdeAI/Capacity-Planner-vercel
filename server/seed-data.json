@@ -1,0 +1,2041 @@
+{
+ "months": [
+  {
+   "key": "apr26",
+   "label": "Apr'26",
+   "days": 22,
+   "hours": 176
+  },
+  {
+   "key": "may26",
+   "label": "May'26",
+   "days": 21,
+   "hours": 168
+  },
+  {
+   "key": "jun26",
+   "label": "Jun'26",
+   "days": 22,
+   "hours": 176
+  },
+  {
+   "key": "jul26",
+   "label": "Jul'26",
+   "days": 23,
+   "hours": 184
+  },
+  {
+   "key": "aug26",
+   "label": "Aug'26",
+   "days": 21,
+   "hours": 168
+  },
+  {
+   "key": "sep26",
+   "label": "Sep'26",
+   "days": 22,
+   "hours": 176
+  },
+  {
+   "key": "oct26",
+   "label": "Oct'26",
+   "days": 22,
+   "hours": 176
+  },
+  {
+   "key": "nov26",
+   "label": "Nov'26",
+   "days": 21,
+   "hours": 168
+  },
+  {
+   "key": "dec26",
+   "label": "Dec'26",
+   "days": 23,
+   "hours": 184
+  },
+  {
+   "key": "jan27",
+   "label": "Jan'27",
+   "days": 21,
+   "hours": 168
+  },
+  {
+   "key": "feb27",
+   "label": "Feb'27",
+   "days": 20,
+   "hours": 160
+  },
+  {
+   "key": "mar27",
+   "label": "Mar'27",
+   "days": 23,
+   "hours": 184
+  }
+ ],
+ "roles": [
+  "AI Developer",
+  "Backend Engineer",
+  "DevOps Engineer",
+  "Frontend Engineer",
+  "Fullstack Engineer",
+  "Product Owner",
+  "QA Engineer",
+  "Solution Architect"
+ ],
+ "resources": [
+  {
+   "id": "r1",
+   "name": "Gopinath Anumalasetty",
+   "role": "Backend Engineer",
+   "area": "Implementation",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r2",
+   "name": "Kamalakar Krovvidi",
+   "role": "Backend Engineer",
+   "area": "Implementation",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r3",
+   "name": "Akshat Wagadre",
+   "role": "Backend Engineer",
+   "area": "Implementation",
+   "cap": [
+    100,
+    100,
+    100,
+    90,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r4",
+   "name": "Akshay Kamate",
+   "role": "Frontend Engineer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r5",
+   "name": "Pooja Sammidi",
+   "role": "Frontend Engineer",
+   "area": "Implementation",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r6",
+   "name": "Fatema Engineeringwala",
+   "role": "Frontend Engineer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r7",
+   "name": "Suresh Balaji",
+   "role": "Fullstack Engineer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r8",
+   "name": "Nima Shiri Harzevili",
+   "role": "AI Developer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r9",
+   "name": "Alireza Daghighfarsoodeh",
+   "role": "AI Developer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r10",
+   "name": "Asif Kalam",
+   "role": "AI Developer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r11",
+   "name": "Bhanuprakash Kandikere Nagaraj",
+   "role": "AI Developer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r12",
+   "name": "Avadhut Arun Bhosarekar",
+   "role": "AI Developer",
+   "area": "Implementation",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r13",
+   "name": "Karuna Tiwari",
+   "role": "AI Developer",
+   "area": "Implementation",
+   "cap": [
+    100,
+    100,
+    100,
+    90,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r14",
+   "name": "Sunny Kumar",
+   "role": "AI Developer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r15",
+   "name": "Vinay Charan Arli",
+   "role": "DevOps Engineer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r16",
+   "name": "Yogesh Balasaheb Bakle",
+   "role": "DevOps Engineer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r17",
+   "name": "Dharmveer Nivuratti Devane",
+   "role": "DevOps Engineer",
+   "area": "Implementation",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r18",
+   "name": "Sameera Devireddi",
+   "role": "QA Engineer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    95,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r19",
+   "name": "Backfill Resource",
+   "role": "QA Engineer",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r20",
+   "name": "Keerthi Bhatt",
+   "role": "Solution Architect",
+   "area": "Engineering",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r21",
+   "name": "Ravi Anand",
+   "role": "Product Owner",
+   "area": "Product",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  },
+  {
+   "id": "r22",
+   "name": "Raju Mahanthesh",
+   "role": "Dir Engineering",
+   "area": "Implementation",
+   "cap": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+   ]
+  }
+ ],
+ "projects": [
+  {
+   "id": "p1",
+   "name": "Context Engineering",
+   "group": "CORE",
+   "area": "Engineering",
+   "status": "Pipeline",
+   "priority": "Medium",
+   "start": "2026-09-01",
+   "end": "2026-11-30",
+   "notes": "",
+   "roles": {
+    "AI Developer": 80,
+    "Backend Engineer": 10,
+    "DevOps Engineer": 10
+   }
+  },
+  {
+   "id": "p2",
+   "name": "Ontology - Semantic Layer development",
+   "group": "CORE",
+   "area": "Engineering",
+   "status": "Pipeline",
+   "priority": "Medium",
+   "start": "2026-11-01",
+   "end": "2027-02-28",
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p3",
+   "name": "Agent Ops",
+   "group": "CORE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "High",
+   "start": null,
+   "end": "2026-09-30",
+   "notes": "",
+   "roles": {
+    "AI Developer": 100
+   }
+  },
+  {
+   "id": "p4",
+   "name": "Prompt Optimizer",
+   "group": "CORE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "Medium",
+   "start": null,
+   "end": "2026-10-30",
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p5",
+   "name": "Conversational Builder",
+   "group": "CORE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": null,
+   "end": "2026-08-31",
+   "notes": "",
+   "roles": {
+    "AI Developer": 20,
+    "Backend Engineer": 50,
+    "Frontend Engineer": 30
+   }
+  },
+  {
+   "id": "p6",
+   "name": "RBAC for Assistants and workers",
+   "group": "CORE",
+   "area": "Engineering",
+   "status": "Pipeline",
+   "priority": "Medium",
+   "start": null,
+   "end": "2026-09-30",
+   "notes": "",
+   "roles": {
+    "AI Developer": 50,
+    "Backend Engineer": 20,
+    "DevOps Engineer": 10,
+    "Frontend Engineer": 20
+   }
+  },
+  {
+   "id": "p7",
+   "name": "NFR: DeepAgent Upgrade",
+   "group": "CORE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "Medium",
+   "start": "2026-05-15",
+   "end": "2026-08-31",
+   "notes": "",
+   "roles": {
+    "AI Developer": 50,
+    "Backend Engineer": 15,
+    "Frontend Engineer": 25,
+    "Solution Architect": 10
+   }
+  },
+  {
+   "id": "p8",
+   "name": "JMMB",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Pipeline",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p9",
+   "name": "Hisense- RecapAI",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Completed",
+   "priority": "High",
+   "start": null,
+   "end": "2026-06-25",
+   "notes": "In Production. Post production fixes in progress",
+   "roles": {}
+  },
+  {
+   "id": "p10",
+   "name": "Senseonics P2",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "On Hold",
+   "priority": "High",
+   "start": null,
+   "end": null,
+   "notes": "In Production. Further progress on Hold from client side",
+   "roles": {
+    "AI Developer": 20,
+    "Backend Engineer": 80
+   }
+  },
+  {
+   "id": "p11",
+   "name": "GDS",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Completed",
+   "priority": "High",
+   "start": null,
+   "end": "2026-06-30",
+   "notes": "In Production. Post production fixes in progress",
+   "roles": {
+    "AI Developer": 100
+   }
+  },
+  {
+   "id": "p12",
+   "name": "CHC+ - Councils rollout",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Active",
+   "priority": "High",
+   "start": null,
+   "end": "2026-09-15",
+   "notes": "Requirement elaboration done. Initial call setup on 25-Jun-26",
+   "roles": {
+    "AI Developer": 10,
+    "DevOps Engineer": 80,
+    "Frontend Engineer": 10
+   }
+  },
+  {
+   "id": "p13",
+   "name": "Ferrari",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": "2026-06-23",
+   "end": null,
+   "notes": "",
+   "roles": {
+    "AI Developer": 100
+   }
+  },
+  {
+   "id": "p14",
+   "name": "TSS",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Active",
+   "priority": "High",
+   "start": "2026-03-01",
+   "end": "2026-10-31",
+   "notes": "",
+   "roles": {
+    "AI Developer": 25,
+    "Backend Engineer": 50,
+    "DevOps Engineer": 10,
+    "QA Engineer": 15
+   }
+  },
+  {
+   "id": "p15",
+   "name": "Astound",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Completed",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "Interaction Intelligence in Production. Customer Health Tab to be pushed in prod",
+   "roles": {
+    "AI Developer": 50,
+    "Backend Engineer": 25,
+    "Frontend Engineer": 25
+   }
+  },
+  {
+   "id": "p16",
+   "name": "AMEX WDE Integration",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Pipeline",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p17",
+   "name": "Rackspace",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Planning",
+   "priority": "Low",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p18",
+   "name": "WeDoPlay",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": null,
+   "end": "2026-08-30",
+   "notes": "KB Analytics reports",
+   "roles": {
+    "Fullstack Engineer": 24
+   }
+  },
+  {
+   "id": "p19",
+   "name": "Choice Health",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": null,
+   "end": "2026-08-30",
+   "notes": "KB Analytics reports, Outbound calls",
+   "roles": {
+    "Fullstack Engineer": 24
+   }
+  },
+  {
+   "id": "p20",
+   "name": "Metrolinx",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": null,
+   "end": "2026-08-30",
+   "notes": "Coaching data synchronization, Any supervisor to start a coaching session,  Deleted articles documents still being referred in KB",
+   "roles": {
+    "AI Developer": 20,
+    "Backend Engineer": 80,
+    "DevOps Engineer": 20,
+    "Frontend Engineer": 20,
+    "Fullstack Engineer": 80,
+    "QA Engineer": 20,
+    "Solution Architect": 10
+   }
+  },
+  {
+   "id": "p21",
+   "name": "15+ Implementations",
+   "group": "IMPLEMENTATION",
+   "area": "Implementation",
+   "status": "Pipeline",
+   "priority": "Low",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p22",
+   "name": "CHC+ & DST Development",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "High",
+   "start": null,
+   "end": "2026-10-30",
+   "notes": "Tentative end date added based on HIgh level understanding of requirements",
+   "roles": {
+    "AI Developer": 50,
+    "Backend Engineer": 25,
+    "Frontend Engineer": 25
+   }
+  },
+  {
+   "id": "p23",
+   "name": "Knowledge Assist migration to Agentic Platform",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Pipeline",
+   "priority": "Low",
+   "start": null,
+   "end": "2026-11-30",
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p24",
+   "name": "Accounts Payable",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "High",
+   "start": "2026-05-15",
+   "end": "2026-07-31",
+   "notes": "MVP completed",
+   "roles": {
+    "AI Developer": 40,
+    "Backend Engineer": 20,
+    "Fullstack Engineer": 30,
+    "Product Owner": 5,
+    "Solution Architect": 5
+   }
+  },
+  {
+   "id": "p25",
+   "name": "Ask Anything",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "High",
+   "start": null,
+   "end": "2026-08-31",
+   "notes": "Development competed. UAT Feedback & testing awaited",
+   "roles": {
+    "AI Developer": 100
+   }
+  },
+  {
+   "id": "p26",
+   "name": "Asset Managament: Fact Sheet",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "High",
+   "start": "2026-05-15",
+   "end": "2026-07-31",
+   "notes": "Development competed. Feedback & testing awaited",
+   "roles": {
+    "AI Developer": 100
+   }
+  },
+  {
+   "id": "p27",
+   "name": "Underwritting Assistance",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "Tied to Ferrari",
+   "roles": {}
+  },
+  {
+   "id": "p28",
+   "name": "RecapAI - Advanced Capabilities",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Pipeline",
+   "priority": "Low",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p29",
+   "name": "NFR: Security related fixes & Improvements",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "On Hold",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {
+    "AI Developer": 20,
+    "Backend Engineer": 30,
+    "Frontend Engineer": 50
+   }
+  },
+  {
+   "id": "p30",
+   "name": "DS Code and Cost Optimization",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "Medium",
+   "start": null,
+   "end": "2026-06-30",
+   "notes": "",
+   "roles": {
+    "AI Developer": 100
+   }
+  },
+  {
+   "id": "p31",
+   "name": "Accounts receivebles & Reconcilliation",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Pipeline",
+   "priority": "Low",
+   "start": null,
+   "end": "2026-08-31",
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p32",
+   "name": "DevOps Optimization",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "High",
+   "start": null,
+   "end": "2026-10-30",
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p33",
+   "name": "UI Component library",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "Low",
+   "start": null,
+   "end": "2026-12-31",
+   "notes": "",
+   "roles": {
+    "DevOps Engineer": 10,
+    "Frontend Engineer": 90
+   }
+  },
+  {
+   "id": "p34",
+   "name": "Corporate Group (2 use cases)",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": null,
+   "end": "2026-10-30",
+   "notes": "",
+   "roles": {
+    "AI Developer": 70,
+    "Backend Engineer": 20,
+    "Frontend Engineer": 10
+   }
+  },
+  {
+   "id": "p35",
+   "name": "HALL Integration - E2E Employee Training & Coaching",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "Low",
+   "start": null,
+   "end": "2026-09-30",
+   "notes": "Planning stage",
+   "roles": {
+    "AI Developer": 80,
+    "Backend Engineer": 10,
+    "DevOps Engineer": 10
+   }
+  },
+  {
+   "id": "p36",
+   "name": "D365 - Worker build out and integration",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "Low",
+   "start": null,
+   "end": "2026-09-30",
+   "notes": "Planning stage",
+   "roles": {
+    "AI Developer": 80,
+    "Backend Engineer": 10,
+    "DevOps Engineer": 10
+   }
+  },
+  {
+   "id": "p37",
+   "name": "Workbench Integration with AMD GPU in Rakspace",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p38",
+   "name": "SLM : Purposebuilt Model finetuning",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p39",
+   "name": "SAP AMS: Integrated Ticket management support app",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Planning",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {}
+  },
+  {
+   "id": "p40",
+   "name": "Bose PoC",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "",
+   "roles": {
+    "Backend Engineer": 40,
+    "DevOps Engineer": 20,
+    "QA Engineer": 5
+   }
+  },
+  {
+   "id": "p41",
+   "name": "LangFlow Data privacy",
+   "group": "CORE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "Auto-recovered: referenced in Capacity Planner allocations but was missing from the Projects register.",
+   "roles": {}
+  },
+  {
+   "id": "p42",
+   "name": "QA & Testing Support",
+   "group": "FEATURE",
+   "area": "Engineering",
+   "status": "Active",
+   "priority": "Medium",
+   "start": null,
+   "end": null,
+   "notes": "Auto-recovered: referenced in Capacity Planner allocations but was missing from the Projects register.",
+   "roles": {}
+  }
+ ],
+ "allocations": [
+  {
+   "id": "a1",
+   "resourceId": "r6",
+   "projectId": "p5",
+   "months": [
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75
+   ]
+  },
+  {
+   "id": "a2",
+   "resourceId": "r8",
+   "projectId": "p7",
+   "months": [
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75
+   ]
+  },
+  {
+   "id": "a3",
+   "resourceId": "r9",
+   "projectId": "p3",
+   "months": [
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75
+   ]
+  },
+  {
+   "id": "a4",
+   "resourceId": "r13",
+   "projectId": "p7",
+   "months": [
+    0,
+    0,
+    0,
+    50,
+    75,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a5",
+   "resourceId": "r9",
+   "projectId": "p4",
+   "months": [
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75
+   ]
+  },
+  {
+   "id": "a6",
+   "resourceId": "r9",
+   "projectId": "p41",
+   "months": [
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75
+   ]
+  },
+  {
+   "id": "a7",
+   "resourceId": "r14",
+   "projectId": "p5",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75
+   ]
+  },
+  {
+   "id": "a8",
+   "resourceId": "r14",
+   "projectId": "p7",
+   "months": [
+    75,
+    75,
+    20,
+    70,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75
+   ]
+  },
+  {
+   "id": "a9",
+   "resourceId": "r20",
+   "projectId": "p5",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75
+   ]
+  },
+  {
+   "id": "a10",
+   "resourceId": "r20",
+   "projectId": "p7",
+   "months": [
+    0,
+    75,
+    20,
+    40,
+    40,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75,
+    75
+   ]
+  },
+  {
+   "id": "a11",
+   "resourceId": "r1",
+   "projectId": "p14",
+   "months": [
+    0,
+    0,
+    100,
+    100,
+    50,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a12",
+   "resourceId": "r2",
+   "projectId": "p14",
+   "months": [
+    0,
+    0,
+    50,
+    50,
+    50,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a13",
+   "resourceId": "r2",
+   "projectId": "p17",
+   "months": [
+    0,
+    0,
+    50,
+    50,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a14",
+   "resourceId": "r3",
+   "projectId": "p10",
+   "months": [
+    0,
+    0,
+    50,
+    50,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a15",
+   "resourceId": "r8",
+   "projectId": "p11",
+   "months": [
+    0,
+    0,
+    25,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a16",
+   "resourceId": "r11",
+   "projectId": "p18",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    10,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a17",
+   "resourceId": "r11",
+   "projectId": "p19",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    10,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a18",
+   "resourceId": "r11",
+   "projectId": "p20",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    30,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a19",
+   "resourceId": "r15",
+   "projectId": "p12",
+   "months": [
+    0,
+    0,
+    0,
+    20,
+    50,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a20",
+   "resourceId": "r20",
+   "projectId": "p12",
+   "months": [
+    0,
+    0,
+    0,
+    20,
+    20,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a21",
+   "resourceId": "r15",
+   "projectId": "p14",
+   "months": [
+    0,
+    0,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a22",
+   "resourceId": "r1",
+   "projectId": "p23",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a23",
+   "resourceId": "r1",
+   "projectId": "p28",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a24",
+   "resourceId": "r10",
+   "projectId": "p22",
+   "months": [
+    0,
+    0,
+    0,
+    80,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a25",
+   "resourceId": "r4",
+   "projectId": "p22",
+   "months": [
+    0,
+    0,
+    0,
+    100,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a26",
+   "resourceId": "r5",
+   "projectId": "p28",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a27",
+   "resourceId": "r6",
+   "projectId": "p23",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a28",
+   "resourceId": "r7",
+   "projectId": "p24",
+   "months": [
+    0,
+    0,
+    100,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a29",
+   "resourceId": "r8",
+   "projectId": "p22",
+   "months": [
+    0,
+    0,
+    50,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a30",
+   "resourceId": "r8",
+   "projectId": "p23",
+   "months": [
+    0,
+    0,
+    25,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a31",
+   "resourceId": "r10",
+   "projectId": "p24",
+   "months": [
+    0,
+    0,
+    100,
+    20,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a32",
+   "resourceId": "r11",
+   "projectId": "p25",
+   "months": [
+    0,
+    0,
+    100,
+    100,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a33",
+   "resourceId": "r12",
+   "projectId": "p30",
+   "months": [
+    0,
+    0,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a34",
+   "resourceId": "r13",
+   "projectId": "p28",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a35",
+   "resourceId": "r14",
+   "projectId": "p26",
+   "months": [
+    0,
+    0,
+    80,
+    30,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a36",
+   "resourceId": "r16",
+   "projectId": "p32",
+   "months": [
+    0,
+    0,
+    100,
+    100,
+    100,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a37",
+   "resourceId": "r17",
+   "projectId": "p32",
+   "months": [
+    0,
+    0,
+    100,
+    100,
+    100,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a38",
+   "resourceId": "r18",
+   "projectId": "p42",
+   "months": [
+    0,
+    0,
+    100,
+    95,
+    100,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a39",
+   "resourceId": "r19",
+   "projectId": "p42",
+   "months": [
+    0,
+    0,
+    100,
+    100,
+    100,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a40",
+   "resourceId": "r20",
+   "projectId": "p24",
+   "months": [
+    0,
+    0,
+    30,
+    30,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a41",
+   "resourceId": "r20",
+   "projectId": "p26",
+   "months": [
+    0,
+    0,
+    30,
+    30,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a42",
+   "resourceId": "r20",
+   "projectId": "p28",
+   "months": [
+    0,
+    0,
+    20,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a43",
+   "resourceId": "r21",
+   "projectId": "p26",
+   "months": [
+    0,
+    0,
+    20,
+    20,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a44",
+   "resourceId": "r21",
+   "projectId": "p28",
+   "months": [
+    0,
+    0,
+    50,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a45",
+   "resourceId": "r21",
+   "projectId": "p24",
+   "months": [
+    0,
+    0,
+    30,
+    40,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a46",
+   "resourceId": "r21",
+   "projectId": "p31",
+   "months": [
+    0,
+    0,
+    0,
+    40,
+    30,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "a47",
+   "resourceId": "r15",
+   "projectId": "p32",
+   "months": [
+    0,
+    0,
+    0,
+    0,
+    30,
+    30,
+    30,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  }
+ ],
+ "fixesApplied": [
+  "Project \u201cAgent Ops\u201d: invalid end date \u201c31-Sep-26\u201d (September has 30 days) corrected to 30-Sep-2026.",
+  "Project \u201cHALL Integration - E2E Employee Training & Coaching\u201d: invalid end date \u201c31-Sep-26\u201d (September has 30 days) corrected to 30-Sep-2026.",
+  "Project \u201cD365 - Worker build out and integration\u201d: invalid end date \u201c31-Sep-26\u201d (September has 30 days) corrected to 30-Sep-2026.",
+  "Project \u201cLangFlow Data privacy\u201d didn\u2019t exist in the Projects register but was referenced in Capacity Planner allocations \u2014 created it automatically so those allocations aren\u2019t orphaned.",
+  "Capacity Planner row for \u201cAkshat Wagadre\u201d: project name \u201cSenseonics\u201d didn\u2019t match the Projects register \u2014 relinked to \u201cSenseonics P2\u201d.",
+  "Capacity Planner row for \u201cYogesh Balasaheb Bakle\u201d: project name \u201cDevOps\u201d didn\u2019t match the Projects register \u2014 relinked to \u201cDevOps Optimization\u201d.",
+  "Capacity Planner row for \u201cDharmveer Nivuratti Devane\u201d: project name \u201cDevOps\u201d didn\u2019t match the Projects register \u2014 relinked to \u201cDevOps Optimization\u201d.",
+  "Project \u201cQA & Testing Support\u201d didn\u2019t exist in the Projects register but was referenced in Capacity Planner allocations \u2014 created it automatically so those allocations aren\u2019t orphaned.",
+  "Capacity Planner row for \u201cBhanuprakash Kandikere Nagaraj\u201d on \u201cWeDoPlay\u201d had role typed as \u201cPower Bi Developer\u201d, conflicting with their role in the Resources register (\u201cAI Developer\u201d). Role is now always looked up live from Resources so this can\u2019t drift out of sync.",
+  "Capacity Planner row for \u201cBhanuprakash Kandikere Nagaraj\u201d on \u201cChoice Health\u201d had role typed as \u201cPower Bi Developer\u201d, conflicting with their role in the Resources register (\u201cAI Developer\u201d). Role is now always looked up live from Resources so this can\u2019t drift out of sync.",
+  "Capacity Planner row for \u201cBhanuprakash Kandikere Nagaraj\u201d on \u201cMetrolinx\u201d had role typed as \u201cBackend Engineer\u201d, conflicting with their role in the Resources register (\u201cAI Developer\u201d). Role is now always looked up live from Resources so this can\u2019t drift out of sync.",
+  "Project # numbering in the original register was non-sequential / duplicated (e.g. project #19 appeared twice). The app numbers projects automatically so this can't happen going forward.",
+  "The original workbook scored project health two different ways on the same sheet (a role-weighted score per month vs. a plain average for the overall comment). The app now uses one consistent role-weighted score everywhere, so the monthly flags and the overall score always agree.",
+  "An orphaned scratch sheet (\u201cSheet1\u201d) with old resource\u2192project notes, unlinked to any formula, was left in the workbook. It has been dropped \u2014 nothing in the app depended on it."
+ ],
+ "meta": {
+  "fyLabel": "FY'27 (Apr 2026 - Mar 2027)",
+  "fyStart": "2026-04-01",
+  "fyEnd": "2027-03-31"
+ }
+}

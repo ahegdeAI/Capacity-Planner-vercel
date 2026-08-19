@@ -1,0 +1,8 @@
+node_modules
+data
+.env
+.git
+.gitignore
+qa-screenshots
+qa-screenshots-vercel
+npm-debug.log

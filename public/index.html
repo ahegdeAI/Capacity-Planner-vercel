@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HGS AgentX — Resource Capacity Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700&family=Raleway:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+<header class="appbar">
+  <div class="brand">
+    <div class="wordmark">HGS<span class="dot">●</span></div>
+    <div class="divider"></div>
+    <div>
+      <div class="title">AgentX resource capacity planner</div>
+      <div class="sub">FY'27 · Apr 2026 – Mar 2027</div>
+    </div>
+  </div>
+  <div class="header-actions">
+    <span id="userChip" class="user-chip"></span>
+    <button class="btn btn-ghost btn-xs" id="logoutBtn" style="display:none;">Log out</button>
+    <button class="header-tab-btn" id="dataTabBtn">⚙ Data</button>
+  </div>
+</header>
+<nav id="tabNav"></nav>
+<main id="view"></main>
+<footer class="appfoot">HGS AgentX resource capacity planner · hosted &amp; shared — every logged-in @hgs.com teammate sees and edits the same data, stored server-side.</footer>
+<script src="app.js"></script>
+</body>
+</html>
