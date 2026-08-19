@@ -320,6 +320,16 @@ input[type="date"].cell-input { min-width: 120px; }
 .badge-ok { background: var(--accent-bg); color: var(--accent-ink); }
 .score-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
 
+/* Allocations grid — compact per-cell status icon (replaces the old
+   verbose "44h left" / "over by 132h" text line). Colour matches the
+   cell's own background tint so it reads as reinforcement, not noise;
+   the exact hour figure lives in this element's title tooltip. */
+.cell-icon { font-size: 12px; line-height: 1; cursor: default; }
+.cell-red .cell-icon { color: var(--red); }
+.cell-green .cell-icon { color: var(--accent-ink); }
+.cell-blue .cell-icon { color: var(--brand); }
+.cell-amber .cell-icon { color: var(--amber); }
+
 footer.appfoot { text-align: center; color: var(--muted); font-size: 12px; padding: 20px; font-family: var(--font-sub); }
 
 /* Resources — working-hours sub-label under month header */

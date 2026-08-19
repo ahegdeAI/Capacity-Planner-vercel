@@ -1029,6 +1029,21 @@
     if (v >= 80) return "cell-amber";
     return "cell-green";
   }
+  // Compact icon for a cell's colour-coded state — replaces the old
+  // verbose "44h left" / "over by 132h" text line on the Allocations grid.
+  // Keyed off the exact same cell-* class the background colour already
+  // uses, so every distinct colour this app assigns to a capacity cell
+  // (see utilCellClass / allocCellClass above) gets its own distinguishable
+  // icon rather than collapsing states together. The precise hour figure
+  // isn't lost — it moves into this element's title tooltip.
+  function cellStateIcon(cellCls) {
+    return {
+      "cell-red": "⚠",   // over-allocated / over capacity
+      "cell-green": "✓",  // healthy / on track
+      "cell-blue": "▽",   // under-utilised — has spare capacity
+      "cell-amber": "◐",  // near capacity (80–100%, raw-% fallback scale)
+    }[cellCls] || "";
+  }
   function flagBadge(flag) {
     if (flag == null) return '<span class="muted">—</span>';
     if (flag === "C") return '<span class="badge badge-c">C</span>';
@@ -1590,7 +1605,12 @@
         const remainingSub = res
           ? (() => {
               const remaining = round(maxAllocatableHours(res, i) - allocatedHoursForResourceMonth(res.id, i), 1);
-              return `<div class="score-sub">${remaining < 0 ? `over by ${Math.abs(remaining)}h` : `${remaining}h left`}</div>`;
+              const tip = remaining < 0 ? `Over by ${Math.abs(remaining)}h` : `${remaining}h left`;
+              const icon = cellStateIcon(cellCls);
+              // Compact icon on-screen, exact hour figure kept available on
+              // hover via title — see cellStateIcon's comment for why each
+              // colour gets its own icon rather than one generic glyph.
+              return icon ? `<div class="score-sub cell-icon" title="${esc(tip)}" aria-label="${esc(tip)}">${icon}</div>` : "";
             })()
           : "";
         return `<td class="${cellCls} ${i === cur ? "cur-month" : ""}">
@@ -2452,8 +2472,20 @@
     function close() { overlay.remove(); }
     overlay.querySelector("#hnCancel").addEventListener("click", close);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    // Restores capacity for this cell back to its frozen pre-holiday
+    // baseCapacity — used both by "Clear" and by saving with the day count
+    // reduced to zero (an in-place "no longer applies" edit). A no-op
+    // (skipped) unless this note's suggestion had actually been applied,
+    // so it never clobbers a capacity % that was never touched by a
+    // holiday note in the first place.
+    async function restoreBaseCapacityIfApplied() {
+      if (!(existing && existing.applied)) return;
+      const cUpdated = await apiPatch(`/resources/${r.id}`, { field: "cap", idx, value: baseCapacity });
+      Object.assign(getResource(r.id), cUpdated);
+    }
     overlay.querySelector("#hnClear").addEventListener("click", async () => {
       try {
+        await restoreBaseCapacityIfApplied();
         const updated = await apiPatch(`/resources/${r.id}`, { field: "capNote", idx, note: null });
         Object.assign(getResource(r.id), updated);
         close();
@@ -2467,15 +2499,35 @@
       const days = overlay.querySelector("#hnDays").value;
       const note = overlay.querySelector("#hnNote").value.trim();
       const hasDays = !!(days && num(days, 0) > 0);
-      const next = (!days && !note) ? null : { type, days: hasDays ? num(days, 0) : null, note };
+      // Carry the frozen pre-holiday baseCapacity (captured once, at modal
+      // open, from the existing note if any — see baseCapForNote) forward
+      // into whatever gets saved. Without this, applyHolidayNoteAndCap
+      // would fall back to baseCapForNote's OWN fallback — the resource's
+      // *current live* capacity % — which, for an already-applied note
+      // being edited, is the holiday-reduced value, not the true
+      // pre-holiday base. That mistake is what caused edits to a saved
+      // note (e.g. correcting a mis-entered day count) to barely move the
+      // resulting %, since it kept re-deriving off an already-shrunk base
+      // instead of the frozen original.
+      const next = (!days && !note) ? null : { type, days: hasDays ? num(days, 0) : null, note, baseCapacity };
       try {
         if (next && hasDays) {
-          // Log the note AND apply the capacity % it implies in one save
-          // action — applyHolidayNoteAndCap freezes baseCapacity and marks
-          // the note applied:true, so no separate "click to apply" chip is
-          // needed any more (see its comment for the full flow).
+          // Log the note AND (re)apply the capacity % it implies in one
+          // save action — always, whether this is a brand-new note or an
+          // edit of one that was already applied. applyHolidayNoteAndCap
+          // freezes baseCapacity (reusing it as-is if already frozen) and
+          // marks the note applied:true, so no separate "click to apply"
+          // chip is needed any more (see its comment for the full flow).
+          // The note's existing `applied` flag is deliberately NOT checked
+          // here — that flag only gates the passive, page-load
+          // reconciliation pass (reconcilePendingHolidayCaps), never this
+          // explicit, user-initiated Save.
           await applyHolidayNoteAndCap(r, idx, next);
         } else {
+          // Day count cleared to zero (note text may remain) — this no
+          // longer implies any capacity reduction, so restore the cell
+          // back to its pre-holiday base before saving the note as-is.
+          await restoreBaseCapacityIfApplied();
           const updated = await apiPatch(`/resources/${r.id}`, { field: "capNote", idx, note: next });
           Object.assign(getResource(r.id), updated);
         }
