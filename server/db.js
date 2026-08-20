@@ -163,6 +163,36 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_versions_ts ON versions(ts);
   CREATE INDEX IF NOT EXISTS idx_allocations_resource ON allocations(resource_id);
   CREATE INDEX IF NOT EXISTS idx_allocations_project ON allocations(project_id);
+
+  -- Imported "Actual Hours" (from OpenAir Excel exports) — see
+  -- server/routes/actuals.js. Additive, brand-new table (no pre-existing
+  -- rows anywhere), so a plain CREATE TABLE IF NOT EXISTS is sufficient; no
+  -- ALTER TABLE ADD COLUMN migration step is needed the way "billable" on
+  -- projects needed one. "month" is an integer index 0-11 into the same 12
+  -- FY months array as allocations.months (see meta.months / seed-data.json
+  -- "months") -- NOT a calendar month number -- so it lines up exactly with
+  -- how allocations already indexes months. "billable" is a snapshot of the
+  -- linked project's billable flag *at import-confirm time*, for historical
+  -- reporting accuracy even if the project's billable flag changes later;
+  -- Project.billable (see projects table) remains the single current-state
+  -- source of truth app-wide. resource_id/project_id are nullable at the
+  -- column level (matches this app's existing FK-less TEXT id convention —
+  -- see allocations.resource_id/project_id, which are also plain TEXT with
+  -- no REFERENCES constraint), but the /api/actuals/confirm route only ever
+  -- inserts rows where both matched, so in practice neither is ever null.
+  CREATE TABLE IF NOT EXISTS actuals (
+    id SERIAL PRIMARY KEY,
+    resource_id TEXT,
+    project_id TEXT,
+    month INTEGER NOT NULL,
+    hours NUMERIC NOT NULL,
+    billable BOOLEAN NOT NULL DEFAULT true,
+    source_file TEXT,
+    imported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS idx_actuals_resource ON actuals(resource_id);
+  CREATE INDEX IF NOT EXISTS idx_actuals_project ON actuals(project_id);
+  CREATE INDEX IF NOT EXISTS idx_actuals_month ON actuals(month);
 `;
 
 // Lazy, idempotent async init — there's no module-load-time synchronous DDL

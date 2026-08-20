@@ -1,0 +1,328 @@
+diff --git a/public/app.js b/public/app.js
+index b96f7bc..5d05e0d 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -232,6 +232,12 @@
+     try {
+       await apiPost(`/versions/${versionId}/restore`);
+       STATE = await apiGet("/state");
++      // Restoring a version loads a fresh snapshot — re-check it for
++      // pending holiday suggestions the same way a fresh page load would,
++      // rather than relying on the one-shot-per-page-load guard (which may
++      // already have fired earlier this session against the pre-restore data).
++      RECONCILED_HOLIDAY_CAPS = false;
++      await reconcilePendingHolidayCaps();
+       await refreshDataTabCaches();
+       ACTIVE_TAB = "data";
+       render();
+@@ -343,6 +349,10 @@
+     try { await apiPost("/auth/logout"); } catch (err) { /* best-effort — clear local state regardless */ }
+     ME = null;
+     STATE = null;
++    // Next login is a fresh session (possibly a different user) — let it
++    // re-check for pending holiday suggestions rather than staying
++    // permanently skipped from this tab's earlier login.
++    RECONCILED_HOLIDAY_CAPS = false;
+     showLoginGate();
+   }
+ 
+@@ -517,6 +527,7 @@
+           }
+           try {
+             STATE = await apiGet("/state");
++            await reconcilePendingHolidayCaps();
+             await refreshDataTabCaches();
+             hideLoginGate();
+           } catch (err) {
+@@ -704,7 +715,7 @@
+   // single formula every hours-based figure in the app derives from:
+   //   maxAllocatableHours = capacityPercent / 100 × workingHours
+   // Since capacityPercent already reflects any logged-holiday reduction
+-  // (see suggestedCapForNote below) once applied, this stays correct
++  // (see applyHolidayNoteAndCap below) once applied, this stays correct
+   // end-to-end without needing to know about holidays itself.
+   // ---------------------------------------------------------------------
+   function maxAllocatableHours(resource, mIdx) {
+@@ -735,8 +746,8 @@
+   //   suggested% = baseCapacity% × (workingDays - loggedDays) / workingDays
+   // Reduces the resource's *pre-holiday* capacity % (so a part-time
+   // person's existing reduced % is further reduced by holidays, not
+-  // overwritten to assume a 100% base) — shared by the Resources-tab cell
+-  // affordance and the "log holiday" modal so both always agree on the
++  // overwritten to assume a 100% base) — shared by the "log holiday" modal
++  // and the pending-note reconciliation pass so both always agree on the
+   // same number.
+   //
+   // "Pre-holiday" base is captured once, into the note itself
+@@ -762,12 +773,6 @@
+     const n = note !== undefined ? note : (resource.capNotes && resource.capNotes[mIdx]);
+     return n && Number.isFinite(n.baseCapacity) ? n.baseCapacity : resourceCap(resource, mIdx);
+   }
+-  function suggestedCapForNote(resource, mIdx) {
+-    const note = resource.capNotes && resource.capNotes[mIdx];
+-    if (!note || !note.days) return null;
+-    const workingDays = STATE.months[mIdx] && STATE.months[mIdx].days;
+-    return suggestedCapForHoliday(baseCapForNote(resource, mIdx, note), workingDays, note.days);
+-  }
+ 
+   function projectInMonth(project, mIdx) {
+     const [first, last] = MONTH_BOUNDS[mIdx];
+@@ -1325,19 +1330,19 @@
+       const capCells = r.cap.map((c, i) => {
+         const note = r.capNotes && r.capNotes[i];
+         const capValue = num(c, 100);
+-        // Suggested capacity % from the logged holiday, only surfaced as a
+-        // one-click chip while it would actually change something — once
+-        // applied (or if there's no note/days), it disappears again.
+-        const suggested = suggestedCapForNote(r, i);
+-        const showSuggestChip = suggested != null && suggested !== capValue;
++        // Capacity % is now always kept in sync automatically as soon as a
++        // holiday/PTO note is logged (see applyHolidayNoteAndCap /
++        // reconcilePendingHolidayCaps) — the number in the cell is always
++        // correct, so there's no separate "click to apply" chip to manage
++        // any more. The amber cell fill + note dot (with a tooltip showing
++        // the logged days) is the only remaining indicator that a month
++        // has a holiday note on it.
+         return `<td class="${i === cur ? "cur-month" : ""} ${note ? "has-note" : ""}">
+           <div class="cap-cell">
+             <input type="number" min="0" max="100" step="5" value="${capValue}"
+               data-entity="resource" data-id="${r.id}" data-field="cap" data-idx="${i}" class="cell-input">
+             <button type="button" class="note-btn ${note ? "has-note" : ""}" data-action="open-holiday" data-id="${r.id}" data-idx="${i}"
+               title="${note ? esc(noteTooltip(note)) : "Log planned or public holiday"}">●</button>
+-            ${showSuggestChip ? `<button type="button" class="suggest-chip" data-action="apply-suggested-cap" data-id="${r.id}" data-idx="${i}" data-value="${suggested}"
+-              title="${esc(note.days)} day(s) off out of ${esc(STATE.months[i].days)} working days in ${esc(STATE.months[i].label)} — suggested capacity ${suggested}% (current ${capValue}% × available days). Click to apply.">→ ${suggested}%</button>` : ""}
+           </div>
+         </td>`;
+       }).join("");
+@@ -1380,7 +1385,7 @@
+           <button class="btn btn-primary" data-action="add-resource">+ Add resource</button>
+         </div>
+         <p class="muted">Edit any cell directly. Capacity % = how much of this person's time is available that month (reduce for planned leave / part-time). Hours shown under each month are working hours, Mon–Fri, weekends excluded. Rolling avg and utilisation update live.</p>
+-        <p class="muted"><span class="legend-dot note-dot"></span> <b>Planned / public holidays:</b> click the dot on any month cell to log leave for that person — it doesn't need its own column. Logged months are highlighted in amber and show a suggested capacity % you can apply with one click.</p>
++        <p class="muted"><span class="legend-dot note-dot"></span> <b>Planned / public holidays:</b> click the dot on any month cell to log leave for that person — it doesn't need its own column. Saving updates that month's capacity % automatically (highlighted in amber), so the number is always correct without a separate apply step.</p>
+         <div class="table-toolbar">
+           <span class="muted">Click a column header to sort. Type in a filter box to narrow rows.</span>
+           <div class="table-toolbar-actions">
+@@ -1974,8 +1979,9 @@
+             <h4>🗓 Planned &amp; public holidays</h4>
+             <ul>
+               <li>On the Resources tab, click the small dot in the corner of any month's capacity cell to log leave for that person — no extra column needed.</li>
+-              <li>It'll suggest a capacity % based on days off, which you can apply with one click.</li>
++              <li>Saving automatically reduces that month's capacity % based on days off — no separate "apply" step needed.</li>
+               <li>Logged months are highlighted in amber, and show up on the Dashboard's "On leave this month" panel.</li>
++              <li>You can still edit the capacity % directly by hand at any time — a manual edit always sticks and is never overwritten automatically.</li>
+             </ul>
+           </div>
+           <div class="help-card">
+@@ -2232,12 +2238,6 @@
+       btn.addEventListener("click", () => openHolidayModal(btn.dataset.id, parseInt(btn.dataset.idx, 10)));
+     });
+ 
+-    // Resources — one-click "apply suggested capacity %" chip shown right
+-    // on the cell for any month with a logged holiday (see suggestedCapForNote).
+-    view.querySelectorAll('[data-action="apply-suggested-cap"]').forEach((btn) => {
+-      btn.addEventListener("click", () => applySuggestedCap(btn.dataset.id, parseInt(btn.dataset.idx, 10), num(btn.dataset.value, 100)));
+-    });
+-
+     // Inline cell edits. Only SELECT/date fire one "change" per commit, so
+     // those re-render (and audit-log) immediately. Everything typed
+     // character-by-character (text/number/textarea) mutates STATE quietly
+@@ -2301,22 +2301,86 @@
+     view.querySelectorAll('[data-action="remove-user"]').forEach((b) => b.addEventListener("click", () => removeUser(b.dataset.id)));
+   }
+ 
+-  // Applies a suggested capacity % to a resource's month cell — shared by
+-  // the one-click chip on the Resources table cell and the "Use this"
+-  // button inside the holiday modal, so both go through the exact same
+-  // PATCH /api/resources/:id call (field: "cap") the manual capacity-cell
+-  // edit uses. That means it's audit-logged identically to a manual edit
+-  // (see server/routes/resources.js), and every downstream calculation
+-  // (Utilisation, Dashboard, Allocations) picks it up immediately since
+-  // they all read the resource's cap[] array live.
+-  async function applySuggestedCap(resourceId, idx, value) {
+-    try {
+-      const updated = await apiPatch(`/resources/${resourceId}`, { field: "cap", idx, value: clampPct(value) });
+-      Object.assign(getResource(resourceId), updated);
+-      await refreshDataTabCaches();
+-    } catch (err) {
+-      alert("Couldn't apply suggested capacity: " + err.message);
+-      throw err;
++  // Computes the suggested capacity % implied by a logged holiday note and
++  // persists it as one save action: PATCH the capacity % (field: "cap" —
++  // the exact same call a manual capacity-cell edit makes, so it's
++  // audit-logged identically as "Capacity % changed" and every downstream
++  // calculation picks it up immediately since they all read the resource's
++  // cap[] array live), then PATCH the note itself (field: "capNote") with
++  // its pre-holiday baseCapacity frozen and applied:true — which is what
++  // marks this note as settled so a later render or reconciliation pass
++  // never re-suggests or re-applies it (see reconcilePendingHolidayCaps).
++  //
++  // Shared by the "log a new holiday" modal's save handler and the
++  // one-time pending-note reconciliation pass on load, so a brand-new
++  // holiday and an old pre-existing "pending" one from before this feature
++  // existed both get applied and persisted identically.
++  async function applyHolidayNoteAndCap(resource, idx, note) {
++    const workingDays = STATE.months[idx] && STATE.months[idx].days;
++    const base = baseCapForNote(resource, idx, note);
++    const suggested = suggestedCapForHoliday(base, workingDays, note.days);
++    if (suggested == null) return null;
++    const cUpdated = await apiPatch(`/resources/${resource.id}`, { field: "cap", idx, value: suggested });
++    Object.assign(resource, cUpdated);
++    const appliedNote = { ...note, baseCapacity: base, applied: true };
++    const nUpdated = await apiPatch(`/resources/${resource.id}`, { field: "capNote", idx, note: appliedNote });
++    Object.assign(resource, nUpdated);
++    return suggested;
++  }
++
++  // ---------------------------------------------------------------------
++  // One-time-per-page-load sweep over every resource+month with a logged
++  // holiday/PTO note whose suggested capacity % hasn't been applied yet.
++  // This is how "pending" notes already sitting in the database — logged
++  // before auto-apply existed, so the cell is still showing its old
++  // pre-holiday capacity % — get resolved automatically the moment the app
++  // loads, without anyone having to hunt down and click a suggestion chip
++  // for each one.
++  //
++  // Safe to call after every full STATE reload (boot, login, version
++  // restore) without misbehaving against real, already-partly-applied
++  // production data:
++  //   1. RECONCILED_HOLIDAY_CAPS — runs at most once per page load; the
++  //      many render() calls that happen afterwards (e.g. every keystroke)
++  //      never re-enter this function. Reset on logout (a fresh login
++  //      re-checks) and explicitly before a version restore (fresh data
++  //      deserves a fresh check).
++  //   2. note.applied — once a note's suggestion has been applied, by this
++  //      pass or by the "log a new holiday" save flow, it's marked
++  //      applied:true and permanently skipped from here on, so it settles
++  //      instead of re-firing on every future load.
++  //   3. resourceCap(r, idx) === baseCapForNote(r, idx, note) — only
++  //      touches a month whose *live* capacity % still equals the
++  //      pre-holiday base the note implies (for a note with no
++  //      baseCapacity recorded — i.e. every real pending note in
++  //      production today — that base falls back to the live capacity
++  //      itself, so this is trivially true and the suggestion applies).
++  //      If a human has since changed that cell by hand, the live % no
++  //      longer matches and this pass leaves it alone rather than
++  //      clobbering their edit.
++  // ---------------------------------------------------------------------
++  let RECONCILED_HOLIDAY_CAPS = false;
++  async function reconcilePendingHolidayCaps() {
++    if (RECONCILED_HOLIDAY_CAPS || !STATE || !Array.isArray(STATE.resources)) return;
++    RECONCILED_HOLIDAY_CAPS = true;
++    const pending = [];
++    STATE.resources.forEach((r) => {
++      (r.capNotes || []).forEach((note, idx) => {
++        if (!note || !note.days || note.applied) return;
++        if (resourceCap(r, idx) !== baseCapForNote(r, idx, note)) return; // manually changed since — don't clobber
++        pending.push({ resourceId: r.id, idx, note });
++      });
++    });
++    if (!pending.length) return;
++    console.info(`Auto-applying ${pending.length} pending holiday-adjusted capacity suggestion(s) found on load (attributed to ${activeUser()})…`);
++    for (const { resourceId, idx, note } of pending) {
++      const r = getResource(resourceId);
++      if (!r) continue;
++      try {
++        await applyHolidayNoteAndCap(r, idx, note);
++      } catch (err) {
++        console.error(`Couldn't auto-apply pending holiday suggestion for resource ${resourceId}, month ${idx}:`, err);
++      }
+     }
+   }
+ 
+@@ -2331,7 +2395,7 @@
+     const existing = r.capNotes[idx];
+     const workingDays = STATE.months[idx].days;
+     const monthLabel = STATE.months[idx].label;
+-    // Captured once when the modal opens (see suggestedCapForNote's
++    // Captured once when the modal opens (see suggestedCapForHoliday's
+     // comment for why): the "pre-holiday" capacity % to compute
+     // suggestions off, so re-opening this modal or tweaking the day count
+     // never compounds a previously-applied suggestion.
+@@ -2373,23 +2437,14 @@
+       // base, and not the live capacity % which may already reflect a
+       // previously-applied suggestion) by the fraction of working days
+       // logged as leave — same formula, and the same shared helper, as the
+-      // one-click chip on the Resources table cell (see suggestedCapForNote
+-      // / suggestedCapForHoliday), so a part-time person's existing reduced
+-      // % is further reduced by holidays rather than being overwritten.
++      // reconciliation pass (see suggestedCapForHoliday), so a part-time
++      // person's existing reduced % is further reduced by holidays rather
++      // than being overwritten. Saving applies this automatically — no
++      // separate "apply" click needed any more.
+       const suggested = suggestedCapForHoliday(baseCapacity, workingDays, days);
+-      if (suggested != null) {
+-        suggestEl.innerHTML = `Suggested capacity for ${esc(monthLabel)} — ${esc(r.name)}'s ${baseCapacity}% capacity × ${workingDays - days}/${workingDays} available working days: <b>${suggested}%</b> <button type="button" class="btn btn-secondary btn-xs" id="hnApply">Use this</button>`;
+-        overlay.querySelector("#hnApply").addEventListener("click", async () => {
+-          try {
+-            await applySuggestedCap(r.id, idx, suggested);
+-            suggestEl.innerHTML += ' <span class="txt-green">✓ applied</span>';
+-          } catch (err) {
+-            // applySuggestedCap already alerted; nothing further to do here.
+-          }
+-        });
+-      } else {
+-        suggestEl.innerHTML = "";
+-      }
++      suggestEl.innerHTML = suggested != null
++        ? `Saving will set capacity for ${esc(monthLabel)} to <b>${suggested}%</b> — ${esc(r.name)}'s ${baseCapacity}% capacity × ${workingDays - days}/${workingDays} available working days.`
++        : "";
+     }
+     overlay.querySelector("#hnDays").addEventListener("input", updateSuggestion);
+     updateSuggestion();
+@@ -2411,13 +2466,19 @@
+       const type = overlay.querySelector("#hnType").value;
+       const days = overlay.querySelector("#hnDays").value;
+       const note = overlay.querySelector("#hnNote").value.trim();
+-      // Freeze the pre-holiday base capacity into the note itself (only
+-      // meaningful once days off are logged) so the suggested % this note
+-      // implies stays stable — see the big comment on suggestedCapForHoliday.
+-      const next = (!days && !note) ? null : { type, days: days ? num(days, 0) : null, note, baseCapacity: days ? baseCapacity : null };
++      const hasDays = !!(days && num(days, 0) > 0);
++      const next = (!days && !note) ? null : { type, days: hasDays ? num(days, 0) : null, note };
+       try {
+-        const updated = await apiPatch(`/resources/${r.id}`, { field: "capNote", idx, note: next });
+-        Object.assign(getResource(r.id), updated);
++        if (next && hasDays) {
++          // Log the note AND apply the capacity % it implies in one save
++          // action — applyHolidayNoteAndCap freezes baseCapacity and marks
++          // the note applied:true, so no separate "click to apply" chip is
++          // needed any more (see its comment for the full flow).
++          await applyHolidayNoteAndCap(r, idx, next);
++        } else {
++          const updated = await apiPatch(`/resources/${r.id}`, { field: "capNote", idx, note: next });
++          Object.assign(getResource(r.id), updated);
++        }
+         close();
+         await refreshDataTabCaches();
+       } catch (err) {
+@@ -2724,6 +2785,7 @@
+       if (meResult && meResult.user) {
+         ME = meResult.user;
+         STATE = await apiGet("/state");
++        await reconcilePendingHolidayCaps();
+         await refreshDataTabCaches();
+         render();
+       } else {
+diff --git a/public/style.css b/public/style.css
+index a7e1ff9..e915c5f 100644
+--- a/public/style.css
++++ b/public/style.css
+@@ -351,17 +351,6 @@ table.grid-table td:has(.cap-cell), table.grid-table th.sortable:has(.th-sub) {
+ td.has-note { background: var(--amber-bg) !important; box-shadow: inset 0 0 0 2px var(--amber); position: relative; z-index: 1; }
+ .legend-dot.note-dot { background: var(--amber); border-radius: 50%; }
+ 
+-/* Resources — one-click "apply suggested capacity %" chip, shown on a
+-   month cell once a holiday note with days-off is logged and the
+-   suggested capacity differs from what's currently set. Sits under the
+-   number input inside the same relatively-positioned .cap-cell. */
+-.suggest-chip {
+-  display: block; width: 100%; margin-top: 2px; border: none; border-radius: 4px;
+-  background: var(--amber); color: #fff; font-size: 10px; font-weight: 700;
+-  padding: 2px 4px; cursor: pointer; line-height: 1.3;
+-}
+-.suggest-chip:hover { filter: brightness(0.9); }
+-
+ /* Projects — status filter chips */
+ .filter-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+ .chip-filter {

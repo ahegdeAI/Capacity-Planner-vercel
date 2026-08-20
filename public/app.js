@@ -38,6 +38,17 @@
   let PROJECT_STATUS_FILTER = "All";
   let uidCounter = 1;
 
+  // ---- Dashboard "as of" date filter (Item A, Dashboard redesign round 1) —
+  // a single module-level date the whole Dashboard is computed relative to.
+  // Defaults to today's real date on load; changing it just updates this
+  // variable and re-renders — every Dashboard metric/chart re-derives from
+  // it via computeDashboard(asOfISO), never from todayISO()/currentMonthIndex()
+  // directly, so nothing on the Dashboard silently keeps using "today" once
+  // a different date is picked. Session-only (not persisted across reloads),
+  // per spec — that's the simplest option and matches how every other piece
+  // of UI state in this file (ACTIVE_TAB, TABLE_FILTER, …) already behaves.
+  let DASHBOARD_ASOF = todayISO(); // real "today" at page-load time; function hoisting makes todayISO() safe to call here
+
   // Only @<ALLOWED_EMAIL_DOMAIN> can register/log in — enforced server-side
   // (see server/auth.js); this is copy-only, for login-gate messaging.
   const ALLOWED_EMAIL_DOMAIN = "hgs.com";
@@ -49,6 +60,11 @@
   let AUDIT_LOG = [];
   let VERSIONS = [];
   let AUDIT_FILTER_USER = "All";
+
+  // ---- imported "Actual Hours" (OpenAir Excel import) — read-through cache
+  // of GET /api/actuals, refreshed on boot and after every confirmed import.
+  // See the Actuals tab / openImportActualsModal(). -----------------------
+  let ACTUALS = [];
 
   // ---- accounts / session — real server-side auth (bcrypt-hashed
   // passwords, @hgs.com domain + email verification enforced in
@@ -104,6 +120,30 @@
   }
   function isBeforeFY() { return todayISO() < MONTH_BOUNDS[0][0]; }
   function isAfterFY() { return todayISO() > MONTH_BOUNDS[11][1]; }
+
+  // FY month index for an arbitrary ISO date — the parameterised sibling of
+  // currentMonthIndex() (which is hard-wired to todayISO()). Dates before
+  // the FY clamp into month 0, dates after clamp into month 11, same
+  // clamping behaviour currentMonthIndex() already has — so the Dashboard's
+  // "as of" filter (Item A) behaves identically whether you land on today
+  // or pick a date outside the fiscal year altogether.
+  function monthIndexForDate(dateISO) {
+    const d = dateISO || todayISO();
+    for (let i = 0; i < 12; i++) {
+      if (d <= MONTH_BOUNDS[i][1]) return i;
+    }
+    return 11;
+  }
+
+  // Strict "does this ISO date fall within FY month i" check — unlike
+  // monthIndexForDate above, a date before/after the FY matches *no* month
+  // (returns false for every i) rather than clamping into month 0/11. Used
+  // by the MoM project-trend chart (Item F), where clamping an out-of-FY
+  // start date into April would misrepresent it as "started this FY".
+  function dateInMonthBounds(dateISO, i) {
+    if (!dateISO) return false;
+    return dateISO >= MONTH_BOUNDS[i][0] && dateISO <= MONTH_BOUNDS[i][1];
+  }
 
   function networkDays(startISO, endISO) {
     if (!startISO || !endISO) return "";
@@ -197,6 +237,15 @@
       AUDIT_LOG = audit; VERSIONS = versions; USERS = users;
     } catch (e) {
       console.error("Couldn't refresh Data tab info:", e);
+    }
+    render();
+  }
+
+  async function refreshActuals() {
+    try {
+      ACTUALS = await apiGet("/actuals");
+    } catch (e) {
+      console.error("Couldn't refresh imported actuals:", e);
     }
     render();
   }
@@ -529,6 +578,13 @@
             STATE = await apiGet("/state");
             await reconcilePendingHolidayCaps();
             await refreshDataTabCaches();
+            // Same read-through caches boot() populates for an
+            // already-authenticated page load — without this, a freshly
+            // logged-in session's ACTUALS cache stays empty (Planned-vs-
+            // Actual / Actual-derived billable split would silently fall
+            // back to "no data" until something else happened to call
+            // refreshActuals(), e.g. opening the Actuals tab).
+            await refreshActuals();
             hideLoginGate();
           } catch (err) {
             errEl.textContent = "Logged in, but couldn't load data: " + err.message;
@@ -994,22 +1050,317 @@
 
   // ---------------------------------------------------------------------
   // COMPUTE: Planned / public holidays logged against capacity cells
+  //
+  // Item D removed the old per-resource itemised listing this used to feed
+  // (the Dashboard's "Planned & public holidays" card grid, one card per
+  // resource-with-a-note) — see the "Dashboard as of" panel's Leave days
+  // KPI below for what replaced it. The old per-entry helper
+  // (leaveEntriesForMonth) went with it since nothing else in the app read
+  // it; leaveDaysForMonth is the cumulative-total replacement (Item C).
   // ---------------------------------------------------------------------
-  function leaveEntriesForMonth(mIdx) {
-    return STATE.resources
-      .filter((r) => r.capNotes && r.capNotes[mIdx])
-      .map((r) => ({ resource: r, note: r.capNotes[mIdx] }));
+  function leaveDaysForMonth(mIdx) {
+    return round(
+      STATE.resources.reduce((sum, r) => {
+        const note = r.capNotes && r.capNotes[mIdx];
+        return sum + (note && Number.isFinite(note.days) ? num(note.days, 0) : 0);
+      }, 0),
+      1
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // COMPUTE: average available capacity % across every resource, per FY
+  // month — accounts for holiday-adjusted capacity reductions the same way
+  // every other capacity figure in the app does, by reading resourceCap()
+  // (which already reflects any logged-holiday reduction). Feeds the
+  // Dashboard trend chart's capacity reference line (Item H), which used to
+  // be hard-coded at a flat 100%.
+  // ---------------------------------------------------------------------
+  function monthlyAvgCapacity() {
+    return MONTH_BOUNDS.map((_, i) => {
+      if (!STATE.resources.length) return null;
+      const vals = STATE.resources.map((r) => resourceCap(r, i));
+      return round(vals.reduce((s, v) => s + v, 0) / vals.length, 1);
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // COMPUTE: monthly utilisation trend split by billable vs non-billable
+  // work (Item G) — for every FY month, each resource's allocated % is
+  // partitioned by whether the allocation's project is billable or not
+  // (STATE.projects[...].billable), converted to a utilisation % against
+  // that resource's capacity exactly like computeUtilisation() does for the
+  // total, then averaged across resources. Because both splits share the
+  // same denominator (capacity) and allocated% billable + allocated%
+  // non-billable == allocated% total for every resource/month, avg(billable)
+  // + avg(non-billable) == avg(total) exactly — the two new lines really do
+  // add up to the existing total line, they're not independently rounded
+  // estimates.
+  // ---------------------------------------------------------------------
+  function monthlyUtilByBillable() {
+    const billableMonthly = [];
+    const nonBillableMonthly = [];
+    for (let i = 0; i < 12; i++) {
+      const billableVals = [];
+      const nonBillableVals = [];
+      STATE.resources.forEach((r) => {
+        const cap = resourceCap(r, i);
+        if (!(cap > 0)) return;
+        let billablePct = 0, nonBillablePct = 0;
+        allocsForResource(r.id).forEach((a) => {
+          const proj = getProject(a.projectId);
+          const pct = num(a.months[i], 0);
+          if (!pct) return;
+          if (proj && proj.billable === false) nonBillablePct += pct;
+          else billablePct += pct; // unknown/missing project defaults to billable, same as billableCount's `!== false` convention elsewhere
+        });
+        billableVals.push(round((billablePct / cap) * 100, 1));
+        nonBillableVals.push(round((nonBillablePct / cap) * 100, 1));
+      });
+      billableMonthly.push(billableVals.length ? round(billableVals.reduce((s, v) => s + v, 0) / billableVals.length, 1) : null);
+      nonBillableMonthly.push(nonBillableVals.length ? round(nonBillableVals.reduce((s, v) => s + v, 0) / nonBillableVals.length, 1) : null);
+    }
+    return { billableMonthly, nonBillableMonthly };
+  }
+
+  // ---------------------------------------------------------------------
+  // COMPUTE: Actual hours (Import Actual Hours / OpenAir Excel) — Planned
+  // vs Actual utilisation, and Actual-derived billable/non-billable split.
+  //
+  // ACTUALS (module state, top of file) is the read-through cache of
+  // GET /api/actuals, refreshed by refreshActuals() on boot and after every
+  // confirmed import — these helpers only ever read that cache, never fetch
+  // on their own, same convention every other COMPUTE function in this file
+  // already follows for STATE.
+  //
+  // Ground rule used everywhere below: a month only counts as "has actuals"
+  // if at least one actuals row exists for it, ANY resource/project. Within
+  // such a month, a resource with no actuals row of its own contributes 0
+  // actual hours (not "no data") — the same "missing = 0" convention
+  // allocatedPctForResourceMonth already uses for planned allocations, so a
+  // person who logged nothing this month reads as 0% actual utilisation,
+  // not as an unknown. Months with literally zero imported rows are the
+  // only ones flagged "no data" — see monthHasActuals().
+  // ---------------------------------------------------------------------
+  function monthHasActuals(mIdx) {
+    return ACTUALS.some((a) => a.month === mIdx);
+  }
+  function actualHoursForResourceMonth(resourceId, mIdx) {
+    return ACTUALS.reduce((s, a) => (a.resourceId === resourceId && a.month === mIdx ? s + num(a.hours, 0) : s), 0);
+  }
+
+  // Default month window for the Planned-vs-Actual chart when the Insights
+  // tab has no month-range control of its own (it doesn't, today) — the
+  // trailing N FY months ending at the given as-of month index, clamped to
+  // the start of the FY. Kept as a named constant so "how far back" is easy
+  // to retune without hunting through the compute function itself.
+  const PLANNED_VS_ACTUAL_TRAILING_MONTHS = 6;
+  function defaultPlannedVsActualRange(asOfMIdx) {
+    const end = Math.max(0, Math.min(11, asOfMIdx));
+    const start = Math.max(0, end - (PLANNED_VS_ACTUAL_TRAILING_MONTHS - 1));
+    const out = [];
+    for (let i = start; i <= end; i++) out.push(i);
+    return out;
+  }
+
+  // Planned utilisation reuses computeUtilisation() unchanged (allocated % ÷
+  // capacity %, averaged across resources). Actual utilisation is the same
+  // shape of figure — imported hours ÷ max-allocatable hours for that
+  // resource/month (maxAllocatableHours(), already holiday-adjusted via
+  // resourceCap()) — averaged the same way, so the two lines are directly
+  // comparable on one chart.
+  function computePlannedVsActualUtil(monthIndices) {
+    const util = computeUtilisation();
+    return monthIndices.map((idx) => {
+      const hasActuals = monthHasActuals(idx);
+      const plannedVals = util.map((u) => u.monthly[idx].util).filter((v) => v != null);
+      const plannedUtil = plannedVals.length ? round(plannedVals.reduce((s, v) => s + v, 0) / plannedVals.length, 1) : null;
+      let actualUtil = null;
+      if (hasActuals) {
+        const actualVals = [];
+        STATE.resources.forEach((r) => {
+          const capHours = maxAllocatableHours(r, idx);
+          if (!(capHours > 0)) return;
+          actualVals.push(round((actualHoursForResourceMonth(r.id, idx) / capHours) * 100, 1));
+        });
+        actualUtil = actualVals.length ? round(actualVals.reduce((s, v) => s + v, 0) / actualVals.length, 1) : null;
+      }
+      return { idx, label: STATE.months[idx] ? STATE.months[idx].label : `Month ${idx + 1}`, plannedUtil, actualUtil, hasActuals };
+    });
+  }
+
+  // Per-resource actual-vs-planned utilisation gap for one month — feeds
+  // the Needs-attention panel's "large plan/actual gap" trigger. Returns
+  // null for a month with no actuals imported at all (see monthHasActuals)
+  // or a resource with no capacity that month, so callers never need to
+  // re-check monthHasActuals themselves.
+  function actualVsPlannedGapForResource(resource, mIdx) {
+    if (!monthHasActuals(mIdx)) return null;
+    // Unlike the aggregate chart/trend lines (which treat a resource with
+    // no actuals row that month as a legitimate 0, same "missing = 0"
+    // convention as planned-allocation figures), this per-resource trigger
+    // requires that resource to actually appear in the import for this
+    // month. An import that only covers part of the team (e.g. one
+    // department's timesheets) shouldn't read every *other* resource as
+    // "went idle" — that's the same "don't fabricate what wasn't imported"
+    // principle the Planned-vs-Actual chart's "no data" bars use, applied
+    // per-resource instead of per-month.
+    const hasResourceActuals = ACTUALS.some((a) => a.resourceId === resource.id && a.month === mIdx);
+    if (!hasResourceActuals) return null;
+    const cap = resourceCap(resource, mIdx);
+    if (!(cap > 0)) return null;
+    const capHours = maxAllocatableHours(resource, mIdx);
+    if (!(capHours > 0)) return null;
+    const plannedUtil = round((allocatedPctForResourceMonth(resource.id, mIdx) / cap) * 100, 1);
+    const actualUtil = round((actualHoursForResourceMonth(resource.id, mIdx) / capHours) * 100, 1);
+    return { plannedUtil, actualUtil, gap: round(Math.abs(actualUtil - plannedUtil), 1) };
+  }
+
+  // Billable/non-billable split for one month — Actual (from imported
+  // hours, resource-capacity-weighted the same way monthlyUtilByBillable
+  // does for planned data) when the month has an import, else the existing
+  // planned-allocation estimate. This is the one figure the whole "Import
+  // Actual Hours" feature exists for per the user's stated priority, so it
+  // gets its own small, direct helper rather than being buried in a bigger
+  // one. Returns hours (not %) — used by the Dashboard's hour KPI tiles.
+  function billableHoursForMonth(mIdx) {
+    if (monthHasActuals(mIdx)) {
+      let billableHours = 0, nonBillableHours = 0;
+      ACTUALS.forEach((a) => {
+        if (a.month !== mIdx) return;
+        if (a.billable) billableHours += num(a.hours, 0);
+        else nonBillableHours += num(a.hours, 0);
+      });
+      return { billableHours: round(billableHours, 1), nonBillableHours: round(nonBillableHours, 1), source: "actual" };
+    }
+    const monthHours = (STATE.months[mIdx] && STATE.months[mIdx].hours) || 0;
+    let billableHours = 0, nonBillableHours = 0;
+    STATE.allocations.forEach((a) => {
+      const pct = num(a.months[mIdx], 0);
+      if (!pct) return;
+      const hrs = (pct / 100) * monthHours;
+      const proj = getProject(a.projectId);
+      if (proj && proj.billable === false) nonBillableHours += hrs;
+      else billableHours += hrs; // unknown/missing project defaults to billable, same convention as elsewhere
+    });
+    return { billableHours: round(billableHours, 1), nonBillableHours: round(nonBillableHours, 1), source: "planned" };
+  }
+
+  // Whole-FY billable/non-billable utilisation-% trend, Actual where a
+  // month has an import, Planned-estimate (monthlyUtilByBillable) where it
+  // doesn't — the per-month `source` array is what lets the Dashboard trend
+  // chart and KPI tiles visually distinguish the two (Item 2 of the
+  // OpenAir-import round: "make it visually clear which months/values are
+  // Actual vs Planned-estimate").
+  function computeMonthlyBillableSplitWithSource() {
+    const planned = monthlyUtilByBillable();
+    const billableMonthly = [], nonBillableMonthly = [], source = [];
+    for (let i = 0; i < 12; i++) {
+      if (monthHasActuals(i)) {
+        const billableVals = [], nonBillableVals = [];
+        STATE.resources.forEach((r) => {
+          const capHours = maxAllocatableHours(r, i);
+          if (!(capHours > 0)) return;
+          let billableHrs = 0, nonBillableHrs = 0;
+          ACTUALS.forEach((a) => {
+            if (a.resourceId !== r.id || a.month !== i) return;
+            if (a.billable) billableHrs += num(a.hours, 0);
+            else nonBillableHrs += num(a.hours, 0);
+          });
+          billableVals.push(round((billableHrs / capHours) * 100, 1));
+          nonBillableVals.push(round((nonBillableHrs / capHours) * 100, 1));
+        });
+        billableMonthly.push(billableVals.length ? round(billableVals.reduce((s, v) => s + v, 0) / billableVals.length, 1) : null);
+        nonBillableMonthly.push(nonBillableVals.length ? round(nonBillableVals.reduce((s, v) => s + v, 0) / nonBillableVals.length, 1) : null);
+        source.push("actual");
+      } else {
+        billableMonthly.push(planned.billableMonthly[i]);
+        nonBillableMonthly.push(planned.nonBillableMonthly[i]);
+        source.push("planned");
+      }
+    }
+    return { billableMonthly, nonBillableMonthly, source };
+  }
+
+  // ---------------------------------------------------------------------
+  // COMPUTE: month-over-month project trend — new / completed / on-hold
+  // (Item F). See the long comment above computeDashboard() for the two
+  // documented proxy judgment calls this relies on (no reliable "when did
+  // status change" signal exists in this data model).
+  // ---------------------------------------------------------------------
+  function computeMomProjectTrend(asOfMIdx) {
+    const months = [];
+    for (let i = 0; i <= asOfMIdx; i++) {
+      const newCount = STATE.projects.filter((p) => dateInMonthBounds(p.start, i)).length;
+      // Proxy #1 (documented, per spec): a project's status has no
+      // "changed on" timestamp anywhere in this data model (confirmed
+      // against the audit log — no historical entity=project field=Status
+      // rows exist for the seed data), so "completed in month i" is
+      // approximated using the project's `end` date as a stand-in for
+      // "when it wrapped up", restricted to projects whose *current*
+      // status is actually Completed.
+      const completedCount = STATE.projects.filter((p) => p.status === "Completed" && dateInMonthBounds(p.end, i)).length;
+      months.push({ idx: i, newCount, completedCount, onHoldCount: 0 });
+    }
+    // Proxy #2 (documented, per spec): On Hold has no date field at all to
+    // anchor it to (not even an approximate one like `end`), so rather than
+    // fabricate a history, the current On-Hold count is shown only as a
+    // snapshot in the *last* (as-of) month of the truncated series — "N
+    // projects on hold as of the selected date" — and left at 0 for every
+    // earlier month instead of implying a (false) precise history.
+    if (months.length) {
+      months[months.length - 1].onHoldCount = STATE.projects.filter((p) => p.status === "On Hold").length;
+    }
+    return months;
+  }
+
+  // Plain-language 1–2 sentence summary of the MoM trend above, for the
+  // quarter (Apr–Jun / Jul–Sep / Oct–Dec / Jan–Mar) containing the as-of
+  // date, truncated the same "nothing after the as-of date" way the chart
+  // itself is.
+  function momTrendSummary(momTrend, asOfMIdx, months) {
+    if (!momTrend.length) return "No project-trend data yet for this date range.";
+    const quarterStart = Math.floor(asOfMIdx / 3) * 3;
+    const inQuarter = momTrend.filter((m) => m.idx >= quarterStart);
+    const newSum = inQuarter.reduce((s, m) => s + m.newCount, 0);
+    const completedSum = inQuarter.reduce((s, m) => s + m.completedCount, 0);
+    const onHoldNow = STATE.projects.filter((p) => p.status === "On Hold").length;
+    const asOfLabel = months[asOfMIdx] ? months[asOfMIdx].label : "";
+    return `${newSum} new project${newSum === 1 ? "" : "s"} started and ${completedSum} completed this quarter, `
+      + `with ${onHoldNow} currently on hold as of ${esc(asOfLabel)}.`;
   }
 
   // ---------------------------------------------------------------------
   // COMPUTE: Dashboard KPIs
+  //
+  // asOfISO (Item A) — every "this month" figure on the Dashboard is
+  // relative to this date, not to todayISO(). Callers must pass it
+  // explicitly (viewDashboard() passes DASHBOARD_ASOF) rather than this
+  // function reaching for module state itself, so the dependency is
+  // traceable from the call site.
+  //
+  // Two judgment calls worth flagging up front (both documented in more
+  // detail at their point of use below):
+  //   - "Active projects as of <date>" = status === "Active" AND the
+  //     project's [start, end] window covers that date (projectInMonth).
+  //     Status itself has no history in this data model (see the MoM-trend
+  //     comment further down), so date-scoping it this way — via the one
+  //     time-bearing signal a project actually has, its date range — is
+  //     the only way to make this figure genuinely react to the date
+  //     filter rather than just relabelling the same always-on count.
+  //   - Billable/non-billable KPI tiles and the status breakdown are
+  //     likewise scoped to "projects whose date range covers <date>", for
+  //     the same reason.
   // ---------------------------------------------------------------------
-  function computeDashboard() {
-    const mIdx = currentMonthIndex();
+  function computeDashboard(asOfISO) {
+    const asOf = asOfISO || todayISO();
+    const mIdx = monthIndexForDate(asOf);
     const util = computeUtilisation();
     const health = computeProjectHealth();
     const summary = computeProjectSummary();
-    const leave = leaveEntriesForMonth(mIdx);
+
+    // Item C — cumulative leave DAYS for the as-of month (not a headcount).
+    const leaveDays = leaveDaysForMonth(mIdx);
 
     const over = util.filter((u) => u.monthly[mIdx].status === "over");
     const under = util.filter((u) => u.monthly[mIdx].status === "under");
@@ -1025,11 +1376,29 @@
     const review = activeProjectsThisMonth.filter((h) => h.monthly[mIdx].flag === "R");
     const ok = activeProjectsThisMonth.filter((h) => h.monthly[mIdx].flag === "OK");
 
-    const statusCounts = {};
-    STATE.projects.forEach((p) => { statusCounts[p.status] = (statusCounts[p.status] || 0) + 1; });
+    // Projects whose [start, end] window covers the as-of date — the one
+    // date-scoped "in scope as of <date>" set every date-reactive
+    // project-count figure below (active count, billable/non-billable
+    // tiles, status breakdown) is built from. Projects with no start/end
+    // set at all fall through projectInMonth's `!project.start` /
+    // `!project.end` checks and count as always-in-scope, same convention
+    // the rest of the app already uses for undated projects.
+    const projectsAsOf = STATE.projects.filter((p) => projectInMonth(p, mIdx));
 
-    const billableCount = STATE.projects.filter((p) => p.billable !== false).length;
-    const nonBillableCount = STATE.projects.length - billableCount;
+    const activeProjectCount = projectsAsOf.filter((p) => p.status === "Active").length;
+
+    // Item E — status breakdown, now date-scoped to projectsAsOf so the
+    // vertical status summary actually moves when the date filter changes
+    // (a plain "count of every project's current status" wouldn't).
+    const statusCounts = {};
+    STATUS_OPTIONS.forEach((s) => { statusCounts[s] = 0; });
+    projectsAsOf.forEach((p) => { statusCounts[p.status] = (statusCounts[p.status] || 0) + 1; });
+
+    // Item B — billable/non-billable hero KPI tiles, date-scoped the same way.
+    const billableCount = projectsAsOf.filter((p) => p.billable !== false).length;
+    const nonBillableCount = projectsAsOf.length - billableCount;
+    const billablePct = projectsAsOf.length ? round((billableCount / projectsAsOf.length) * 100, 0) : 0;
+    const nonBillablePct = projectsAsOf.length ? round((nonBillableCount / projectsAsOf.length) * 100, 0) : 0;
 
     // ---- Utilisation trend — average utilisation % across every resource,
     // for every month in the FY (not just the current one). Feeds the
@@ -1039,6 +1408,28 @@
       const valid = util.map((u) => u.monthly[i].util).filter((v) => v != null);
       return valid.length ? round(valid.reduce((s, v) => s + v, 0) / valid.length, 1) : null;
     });
+
+    // Item G — same trend, split into billable / non-billable lines. Now
+    // Actual-derived (from imported actuals) for any month that has an
+    // import, Planned-estimate otherwise — see computeMonthlyBillableSplitWithSource.
+    // monthlyBillableSource[i] is "actual" | "planned", one per FY month.
+    const { billableMonthly: monthlyBillableUtil, nonBillableMonthly: monthlyNonBillableUtil, source: monthlyBillableSource } = computeMonthlyBillableSplitWithSource();
+
+    // Billable/non-billable HOURS for the as-of month specifically — Actual
+    // when imported, Planned-estimate otherwise. Feeds the Dashboard's hour
+    // KPI tiles (the main reason the OpenAir import feature exists — see
+    // billableHoursForMonth's own comment).
+    const billableHoursThisMonth = billableHoursForMonth(mIdx);
+
+    // Item H — actual average available capacity % per month (holiday-
+    // adjusted), replacing the old flat 100% reference line.
+    const monthlyAvgCap = monthlyAvgCapacity();
+
+    // Item F — new / completed / on-hold project counts per month, leading
+    // up to (and including) the as-of month. See computeMomProjectTrend()
+    // for the two documented proxy judgment calls.
+    const momTrend = computeMomProjectTrend(mIdx);
+    const momSummaryText = momTrendSummary(momTrend, mIdx, STATE.months);
 
     // ---- Average utilisation by role — feeds the Dashboard's bar chart.
     // Only roles with at least one resource that has a computable avgUtil
@@ -1079,17 +1470,210 @@
     });
 
     return {
-      mIdx,
+      asOf, mIdx,
       totalResources: STATE.resources.length,
       totalProjects: STATE.projects.length,
       totalAllocationRows: STATE.allocations.length,
-      activeProjectCount: statusCounts.Active || 0,
+      projectsAsOfCount: projectsAsOf.length,
+      activeProjectCount,
       statusCounts,
-      billableCount, nonBillableCount, billableByGroup,
-      avgUtilThisMonth, monthlyAvgUtil, utilByRole,
+      billableCount, nonBillableCount, billablePct, nonBillablePct, billableByGroup,
+      billableHoursThisMonth,
+      avgUtilThisMonth, monthlyAvgUtil, monthlyBillableUtil, monthlyNonBillableUtil, monthlyBillableSource, monthlyAvgCap, utilByRole,
       over, under, healthy,
       critical, review, ok,
-      summary, leave,
+      summary, leaveDays,
+      momTrend, momSummaryText,
+    };
+  }
+
+  function median(vals) {
+    if (!vals.length) return null;
+    const s = vals.slice().sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 ? round(s[mid], 1) : round((s[mid - 1] + s[mid]) / 2, 1);
+  }
+
+  // ---------------------------------------------------------------------
+  // COMPUTE: Insights-tab summary (Item I, Dashboard redesign round 2) —
+  // a handful of headline aggregates pulled from the very same
+  // computeUtilisation() / computeProjectHealth() / computeProjectSummary()
+  // results that back the Insights tab's three sub-views, so this panel is
+  // never a second source of truth for those numbers — just a different,
+  // exec-skim presentation of the same live-computed data.
+  //
+  // Date-scoping judgment call: none of the three Insights sub-views were
+  // built with an "as of" parameter — Item A (round 1) only threaded
+  // DASHBOARD_ASOF through the Dashboard's own compute functions, not the
+  // Insights views themselves, and rewriting those is out of scope for
+  // this round. But each sub-view's result already carries a per-FY-month
+  // array (monthly[i]) for exactly this reason, the same shape
+  // computeDashboard() already indexes into (at asOf's month) for its own
+  // over/under/healthy and critical/review/ok splits. So rather than leave
+  // this panel un-date-scoped (the one panel on the page that would then
+  // silently ignore the date filter) or rewrite the three Insights views
+  // (a much larger change), this reads the identical monthly[mIdx] slice
+  // computeDashboard() already uses — same convention, same month-index
+  // lookup, no new judgment calls beyond what round 1 already settled.
+  //
+  // Redundancy judgment call: the two figures the spec singles out as
+  // likely-redundant with the Needs-attention panel — "count of projects
+  // flagged at-risk / needing review" and "count of over/under-utilised
+  // resources" — are deliberately NOT repeated here as their own headline
+  // numbers; Needs-attention already itemises those by name just below.
+  // This panel instead surfaces what Needs-attention does *not* show:
+  // mean/median scores across the whole portfolio, the "healthy" side of
+  // each distribution (how many are fine, not just how many aren't), and a
+  // Project-summary-only figure (unstaffed-this-month project count) with
+  // no equivalent anywhere else on the Dashboard. The over/critical/review
+  // counts still appear as a small secondary sub-line on each card (for
+  // "at a glance" context), never as the headline stat itself.
+  // ---------------------------------------------------------------------
+  function computeInsightsSummary(asOfISO) {
+    const asOf = asOfISO || todayISO();
+    const mIdx = monthIndexForDate(asOf);
+    const util = computeUtilisation();
+    const health = computeProjectHealth();
+    const summary = computeProjectSummary();
+
+    // Utilisation sub-view headline.
+    const utilValsThisMonth = util.map((u) => u.monthly[mIdx].util).filter((v) => v != null);
+    const medianUtil = median(utilValsThisMonth);
+    const healthyUtilCount = util.filter((u) => u.monthly[mIdx].status === "healthy").length;
+    const overCount = util.filter((u) => u.monthly[mIdx].status === "over").length;
+    const underCount = util.filter((u) => u.monthly[mIdx].status === "under").length;
+
+    // Project health sub-view headline.
+    const scoresThisMonth = health.map((h) => h.monthly[mIdx]).filter((m) => m.score != null);
+    const avgHealthScore = scoresThisMonth.length ? round(scoresThisMonth.reduce((s, m) => s + m.score, 0) / scoresThisMonth.length, 1) : null;
+    const medianHealthScore = median(scoresThisMonth.map((m) => m.score));
+    const criticalCount = scoresThisMonth.filter((m) => m.flag === "C").length;
+    const reviewCount = scoresThisMonth.filter((m) => m.flag === "R").length;
+    const okCount = scoresThisMonth.filter((m) => m.flag === "OK").length;
+
+    // Project summary sub-view headline — scoped to the same "project's
+    // date range covers asOf" set (projectInMonth) computeDashboard()'s
+    // projectsAsOf already uses, so "unstaffed" means "in scope as of this
+    // date, but nobody's allocated against it this month", not "never had
+    // any allocation, ever".
+    const projectsAsOf = STATE.projects.filter((p) => projectInMonth(p, mIdx));
+    const summaryByProjectId = new Map(summary.map((s) => [s.project.id, s]));
+    const allocPctThisMonth = projectsAsOf.map((p) => {
+      const row = summaryByProjectId.get(p.id);
+      return (row && row.monthly[mIdx]) || 0;
+    });
+    const staffedVals = allocPctThisMonth.filter((v) => v > 0);
+    const avgAllocPct = staffedVals.length ? round(staffedVals.reduce((s, v) => s + v, 0) / staffedVals.length, 0) : null;
+    const unstaffedCount = allocPctThisMonth.filter((v) => !v).length;
+
+    return {
+      asOf, mIdx,
+      medianUtil, healthyUtilCount, overCount, underCount,
+      avgHealthScore, medianHealthScore, criticalCount, reviewCount, okCount,
+      avgAllocPct, unstaffedCount, projectsInScopeCount: projectsAsOf.length,
+    };
+  }
+
+  // First line of a (possibly bulleted, possibly multi-line) notes field,
+  // truncated to a short excerpt — used by the Executive summary's
+  // "Notable updates" strip (Item J) so a long notes field never blows out
+  // the layout there.
+  function noteExcerpt(note, maxLen) {
+    const lines = String(note || "").split("\n").map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) return "";
+    const stripped = lines[0].replace(/^[-*•]\s?/, "");
+    const cap = maxLen || 90;
+    return stripped.length > cap ? stripped.slice(0, cap - 1).trimEnd() + "…" : stripped;
+  }
+
+  // ---------------------------------------------------------------------
+  // COMPUTE: Executive summary — accomplishments & next steps (Item J,
+  // Dashboard redesign round 2). Auto-generated from real data, never
+  // hand-written copy: every figure/name below comes straight out of
+  // STATE.projects / STATE.resources / the Needs-attention computation
+  // already in computeDashboard(), so the text changes (and stays
+  // factually accurate) whenever DASHBOARD_ASOF or the underlying data
+  // changes.
+  //
+  // "Recent" window for accomplishments reuses the exact same judgment
+  // call as the MoM trend chart (Item F, round 1) rather than inventing a
+  // new one: this data model has no "status changed on" timestamp
+  // anywhere, so a Completed project's `end` date (and a new project's
+  // `start` date) stand in as the proxy signal, and — same as
+  // momTrendSummary() — the window is "the fiscal quarter containing
+  // asOf, truncated at asOf's own month" (quarter-to-date), not the whole
+  // FY-to-date or a fixed 30/90-day window.
+  // ---------------------------------------------------------------------
+  function computeExecSummary(asOfISO, d) {
+    const asOf = asOfISO || todayISO();
+    const mIdx = monthIndexForDate(asOf);
+    const quarterStart = Math.floor(mIdx / 3) * 3;
+    const quarterLabel = (STATE.months[quarterStart] && STATE.months[mIdx])
+      ? (quarterStart === mIdx ? STATE.months[mIdx].label : `${STATE.months[quarterStart].label}–${STATE.months[mIdx].label}`)
+      : "this period";
+
+    // Accomplishments — completed projects, quarter-to-date, using the
+    // same end-date proxy computeMomProjectTrend() documents in detail.
+    const completedRecent = STATE.projects.filter((p) => {
+      if (p.status !== "Completed" || !p.end) return false;
+      for (let i = quarterStart; i <= mIdx; i++) if (dateInMonthBounds(p.end, i)) return true;
+      return false;
+    }).sort((a, b) => (b.end || "").localeCompare(a.end || ""));
+
+    // "Newly launched" — same window, start-date proxy (mirrors
+    // computeMomProjectTrend's newCount signal), surfaced by name.
+    const newlyLaunched = STATE.projects.filter((p) => {
+      if (!p.start) return false;
+      for (let i = quarterStart; i <= mIdx; i++) if (dateInMonthBounds(p.start, i)) return true;
+      return false;
+    }).sort((a, b) => (b.start || "").localeCompare(a.start || ""));
+
+    // Resources "back from leave" — a logged holiday/PTO note in the month
+    // immediately before asOf's month, with none logged in asOf's own
+    // month. No seed data currently has any capNotes at all, so this list
+    // is (correctly) always empty out of the box — it's written to be
+    // genuinely data-driven and light up the moment someone logs a
+    // holiday, rather than a guaranteed-empty placeholder; the UI omits
+    // this line entirely when empty instead of asserting "0 resources",
+    // per the "don't fabricate accomplishments the data doesn't support"
+    // guidance.
+    const backFromLeave = mIdx > 0
+      ? STATE.resources.filter((r) => r.capNotes && r.capNotes[mIdx - 1] && !r.capNotes[mIdx])
+      : [];
+
+    // Next steps — active-as-of-asOf, upcoming (start after asOf, may be
+    // none), and at-risk (reusing computeDashboard()'s own critical/review
+    // split for this exact asOf, so the count here can never drift from
+    // what Needs-attention shows).
+    const activeProjects = STATE.projects.filter((p) => p.status === "Active" && projectInMonth(p, mIdx));
+    const upcomingProjects = STATE.projects.filter((p) => p.start && p.start > asOf).sort((a, b) => a.start.localeCompare(b.start));
+    const atRiskProjects = [...d.critical, ...d.review].map((h) => ({ project: h.project, score: h.monthly[mIdx].score, flag: h.monthly[mIdx].flag }));
+
+    // Notable notes — a handful of short excerpts, not a full dump of the
+    // Notes column. At-risk projects first (most actionable), then other
+    // Active projects with notes, then recently-completed ones — capped at
+    // 4 so this reads as "supporting detail", not a second Projects table.
+    const noteCandidates = [];
+    const seenNoteIds = new Set();
+    function addNoteCandidates(list, tag) {
+      list.forEach((p) => {
+        if (seenNoteIds.has(p.id) || !p.notes || !String(p.notes).trim()) return;
+        seenNoteIds.add(p.id);
+        noteCandidates.push({ project: p, tag });
+      });
+    }
+    addNoteCandidates(atRiskProjects.map((r) => r.project), "at-risk");
+    addNoteCandidates(activeProjects, "active");
+    addNoteCandidates(completedRecent, "completed");
+    const notableNotes = noteCandidates.slice(0, 4).map((c) => ({
+      id: c.project.id, name: c.project.name, tag: c.tag, excerpt: noteExcerpt(c.project.notes),
+    }));
+
+    return {
+      asOf, mIdx, quarterLabel,
+      completedRecent, newlyLaunched, backFromLeave,
+      activeProjects, upcomingProjects, atRiskProjects,
+      notableNotes,
     };
   }
 
@@ -1211,37 +1795,382 @@
   }
 
   // Trend line (inline SVG) — average utilisation % across all resources,
-  // one point per FY month. A simple area+line chart with a labelled
-  // 100%-capacity reference line and the current month highlighted, so an
-  // exec can see at a glance whether utilisation is trending toward or
-  // away from full capacity across the year, not just this month's snapshot.
-  function utilTrendSvg(monthlyAvgUtil, months, curIdx) {
-    const w = 760, h = 200, padL = 8, padR = 8, padT = 16, padB = 26;
+  // one point per FY month, now with two additional lines (Item G):
+  // billable-work utilisation and non-billable-work utilisation, split out
+  // of the same total. The old flat "100% capacity" reference line is
+  // replaced (Item H) with the actual average available capacity % per
+  // month (holiday-adjusted via resourceCap()/monthlyAvgCapacity()), so it
+  // dips in months with more logged holidays instead of sitting flat.
+  //
+  // Three data lines is already close to the "too cluttered" line the spec
+  // warns about, so colours are chosen to stay legible: total keeps the
+  // existing brand-blue area+line treatment (unchanged, so the existing
+  // chart doesn't visually reset), billable uses teal, non-billable uses
+  // navy — both distinct existing brand tokens, neither overlapping the
+  // red/amber/green over/healthy/under vocabulary used elsewhere so these
+  // don't get misread as status colours.
+  // billableSource (optional): per-month "actual" | "planned" array (see
+  // computeMonthlyBillableSplitWithSource) — when present, every known
+  // billable/non-billable point gets its own small dot, filled for a month
+  // with imported actuals or hollow for a planned-estimate month, so the
+  // Actual-vs-Planned distinction (spec item 2) is visible directly on the
+  // trend line, not just in a KPI tile.
+  function utilTrendSvg(trend, months, curIdx) {
+    const { total, billable, nonBillable, capacity, billableSource } = trend;
+    const w = 760, h = 210, padL = 8, padR = 8, padT = 16, padB = 26;
     const innerW = w - padL - padR, innerH = h - padT - padB;
-    const vals = monthlyAvgUtil.map((v) => (v == null ? null : v));
-    const known = vals.filter((v) => v != null);
+    const known = total.filter((v) => v != null);
     if (!known.length) return `<p class="muted chart-empty">No utilisation data yet — add resources and allocations.</p>`;
-    const maxV = Math.max(100, ...known) * 1.1;
+    const allKnownVals = [total, billable, nonBillable, capacity].flat().filter((v) => v != null);
+    const maxV = Math.max(100, ...allKnownVals) * 1.1;
     const stepX = months.length > 1 ? innerW / (months.length - 1) : 0;
     const yFor = (v) => padT + innerH - (v / maxV) * innerH;
     const xFor = (i) => padL + i * stepX;
-    const pts = vals.map((v, i) => (v == null ? null : [xFor(i), yFor(v)]));
-    const knownPts = pts.filter(Boolean);
-    const linePath = knownPts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+
+    function seriesPath(vals) {
+      const pts = vals.map((v, i) => (v == null ? null : [xFor(i), yFor(v)]));
+      const knownPts = pts.filter(Boolean);
+      const path = knownPts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+      return { pts, path };
+    }
+
+    const totalSeries = seriesPath(total);
+    const billableSeries = seriesPath(billable);
+    const nonBillableSeries = seriesPath(nonBillable);
+    const capSeries = seriesPath(capacity);
+
+    const knownPts = totalSeries.pts.filter(Boolean);
     const areaPath = knownPts.length
-      ? linePath + ` L${knownPts[knownPts.length - 1][0].toFixed(1)},${(padT + innerH).toFixed(1)} L${knownPts[0][0].toFixed(1)},${(padT + innerH).toFixed(1)} Z`
+      ? totalSeries.path + ` L${knownPts[knownPts.length - 1][0].toFixed(1)},${(padT + innerH).toFixed(1)} L${knownPts[0][0].toFixed(1)},${(padT + innerH).toFixed(1)} Z`
       : "";
-    const y100 = yFor(100).toFixed(1);
-    const dots = pts.map((p, i) => p ? `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${i === curIdx ? 4.5 : 2.5}" class="trend-dot ${i === curIdx ? "trend-dot-cur" : ""}"><title>${esc(months[i].label)}: ${vals[i]}% avg utilisation</title></circle>` : "").join("");
-    const labels = pts.map((p, i) => `<text x="${xFor(i).toFixed(1)}" y="${h - 6}" class="trend-month-label ${i === curIdx ? "cur" : ""}" text-anchor="middle">${esc(months[i].label.replace(/'\d\d$/, ""))}</text>`).join("");
-    return `<svg viewBox="0 0 ${w} ${h}" class="trend-svg" role="img" aria-label="Utilisation trend across the fiscal year">
-      <line x1="${padL}" y1="${y100}" x2="${w - padR}" y2="${y100}" class="trend-ref-line"></line>
-      <text x="${w - padR}" y="${(Number(y100) - 4).toFixed(1)}" class="trend-ref-label" text-anchor="end">100% capacity</text>
+
+    const dots = totalSeries.pts.map((p, i) => p ? `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${i === curIdx ? 4.5 : 2.5}" class="trend-dot ${i === curIdx ? "trend-dot-cur" : ""}"><title>${esc(months[i].label)}: ${total[i]}% avg utilisation (as of date filter)</title></circle>` : "").join("");
+    const labels = totalSeries.pts.map((p, i) => `<text x="${xFor(i).toFixed(1)}" y="${h - 6}" class="trend-month-label ${i === curIdx ? "cur" : ""}" text-anchor="middle">${esc(months[i].label.replace(/'\d\d$/, ""))}</text>`).join("");
+
+    function sourceDots(pts, vals, keyPrefix, seriesLabel) {
+      if (!billableSource) return "";
+      return pts.map((p, i) => {
+        if (!p) return "";
+        const src = billableSource[i] || "planned";
+        return `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.6" class="${keyPrefix}-dot-${src}"><title>${esc(months[i].label)} — ${seriesLabel}: ${vals[i]}% (${src === "actual" ? "Actual, from imported hours" : "Planned estimate"})</title></circle>`;
+      }).join("");
+    }
+    const billableDots = sourceDots(billableSeries.pts, billable, "billsrc", "Billable-work utilisation");
+    const nonBillableDots = sourceDots(nonBillableSeries.pts, nonBillable, "nbsrc", "Non-billable-work utilisation");
+
+    return `<svg viewBox="0 0 ${w} ${h}" class="trend-svg" role="img" aria-label="Utilisation trend across the fiscal year, split by billable/non-billable, against actual average capacity">
+      ${capSeries.path ? `<path d="${capSeries.path}" class="trend-ref-line-path"></path>` : ""}
       ${areaPath ? `<path d="${areaPath}" class="trend-area"></path>` : ""}
-      ${linePath ? `<path d="${linePath}" class="trend-line"></path>` : ""}
+      ${totalSeries.path ? `<path d="${totalSeries.path}" class="trend-line"></path>` : ""}
+      ${billableSeries.path ? `<path d="${billableSeries.path}" class="trend-line-billable"></path>` : ""}
+      ${nonBillableSeries.path ? `<path d="${nonBillableSeries.path}" class="trend-line-nonbillable"></path>` : ""}
+      ${billableDots}
+      ${nonBillableDots}
       ${dots}
       ${labels}
-    </svg>`;
+    </svg>
+    <div class="bar-chart-legend muted">
+      <span class="legend-dot" style="background:var(--brand-dark)"></span> Total utilisation &nbsp;
+      <span class="legend-dot" style="background:var(--teal)"></span> Billable-work utilisation &nbsp;
+      <span class="legend-dot" style="background:var(--navy)"></span> Non-billable-work utilisation &nbsp;
+      <span class="legend-dot" style="background:var(--amber)"></span> Avg. available capacity (holiday-adjusted)
+      ${billableSource ? `&nbsp; <span class="src-legend-dot src-legend-actual"></span> Actual (imported) &nbsp; <span class="src-legend-dot src-legend-planned"></span> Planned (est.)` : ""}
+    </div>`;
+  }
+
+  // Grouped bar chart (inline SVG) — Planned vs Actual resource utilisation,
+  // one group of 2 bars per month (see computePlannedVsActualUtil /
+  // defaultPlannedVsActualRange above). Same dependency-free hand-rolled-SVG
+  // approach as the other Dashboard/Insights charts. Months with no actuals
+  // imported at all get a short hatched "no data" placeholder instead of a
+  // fabricated 0% bar, so they can't be misread as "0% actual utilisation".
+  function plannedVsActualSvg(rows) {
+    if (!rows.length) return `<p class="muted chart-empty">No months to show yet.</p>`;
+    const w = 760, h = 230, padL = 10, padR = 10, padT = 14, padB = 34;
+    const innerW = w - padL - padR, innerH = h - padT - padB;
+    const n = rows.length;
+    const groupW = innerW / n;
+    const barGap = 5;
+    const barW = Math.max(12, (groupW - barGap - 18) / 2);
+    const allVals = rows.flatMap((r) => [r.plannedUtil, r.actualUtil]).filter((v) => v != null);
+    const maxVal = Math.max(100, ...allVals) * 1.1;
+    const yFor = (v) => (v / maxVal) * innerH;
+
+    function bar(x, v, cls, title) {
+      if (v == null) return "";
+      const bh = yFor(v);
+      const y = padT + innerH - bh;
+      return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="2" class="pva-bar ${cls}"><title>${esc(title)}</title></rect>`;
+    }
+
+    const bars = rows.map((r, i) => {
+      const gx = padL + i * groupW + (groupW - (barW * 2 + barGap)) / 2;
+      const plannedBar = bar(gx, r.plannedUtil, "pva-planned", `${r.label} — Planned: ${r.plannedUtil == null ? "—" : r.plannedUtil + "%"}`);
+      let actualBar;
+      if (r.hasActuals) {
+        actualBar = bar(gx + barW + barGap, r.actualUtil, "pva-actual", `${r.label} — Actual: ${r.actualUtil == null ? "—" : r.actualUtil + "%"}`);
+      } else {
+        const phH = 8;
+        const y = padT + innerH - phH;
+        actualBar = `<rect x="${(gx + barW + barGap).toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${phH}" rx="2" class="pva-bar pva-nodata"><title>${esc(r.label)} — No actuals imported for this month yet</title></rect>`;
+      }
+      return plannedBar + actualBar;
+    }).join("");
+
+    const labels = rows.map((r, i) => {
+      const cx = (padL + i * groupW + groupW / 2).toFixed(1);
+      const monthLabel = `<text x="${cx}" y="${h - 18}" class="trend-month-label" text-anchor="middle">${esc(r.label.replace(/'\d\d$/, ""))}</text>`;
+      const noDataLabel = !r.hasActuals ? `<text x="${cx}" y="${h - 6}" class="pva-nodata-label" text-anchor="middle">no data</text>` : "";
+      return monthLabel + noDataLabel;
+    }).join("");
+
+    return `<svg viewBox="0 0 ${w} ${h}" class="trend-svg pva-svg" role="img" aria-label="Planned vs actual resource utilisation by month">
+      <line x1="${padL}" y1="${(padT + innerH).toFixed(1)}" x2="${w - padR}" y2="${(padT + innerH).toFixed(1)}" class="mom-axis"></line>
+      ${bars}
+      ${labels}
+    </svg>
+    <div class="bar-chart-legend muted">
+      <span class="legend-dot pva-planned"></span> Planned (allocation ÷ capacity) &nbsp;
+      <span class="legend-dot pva-actual"></span> Actual (imported hours ÷ capacity) &nbsp;
+      <span class="legend-dot pva-nodata"></span> No actuals imported for that month
+    </div>`;
+  }
+
+  // Grouped bar chart (inline SVG) — projects new vs completed vs on-hold,
+  // one group of 3 bars per FY month, leading up to (and including) the
+  // as-of month only (Item F: "respect the date filter"). Same
+  // dependency-free hand-rolled-SVG approach as utilTrendSvg above, for
+  // visual consistency with the rest of the Dashboard's charts.
+  function momTrendSvg(momTrend, months) {
+    if (!momTrend.length) return `<p class="muted chart-empty">No months to show yet for this date range.</p>`;
+    const w = 760, h = 220, padL = 10, padR = 10, padT = 14, padB = 30;
+    const innerW = w - padL - padR, innerH = h - padT - padB;
+    const n = momTrend.length;
+    const groupW = innerW / n;
+    const barGap = 3;
+    const barW = Math.max(5, (groupW - barGap * 2 - 12) / 3);
+    const maxVal = Math.max(1, ...momTrend.flatMap((m) => [m.newCount, m.completedCount, m.onHoldCount]));
+
+    function bar(x, v, cls, title) {
+      if (!v) return "";
+      const bh = (v / maxVal) * innerH;
+      const y = padT + innerH - bh;
+      return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${bh.toFixed(1)}" rx="2" class="mom-bar ${cls}"><title>${esc(title)}: ${v}</title></rect>`;
+    }
+
+    const bars = momTrend.map((m) => {
+      const gx = padL + m.idx * groupW + (groupW - (barW * 3 + barGap * 2)) / 2;
+      const label = months[m.idx] ? months[m.idx].label : `Month ${m.idx + 1}`;
+      return bar(gx, m.newCount, "mom-new", `${label} — New`)
+        + bar(gx + barW + barGap, m.completedCount, "mom-completed", `${label} — Completed`)
+        + bar(gx + 2 * (barW + barGap), m.onHoldCount, "mom-onhold", `${label} — On hold (as-of snapshot)`);
+    }).join("");
+
+    const labels = momTrend.map((m) => {
+      const label = months[m.idx] ? months[m.idx].label.replace(/'\d\d$/, "") : "";
+      return `<text x="${(padL + m.idx * groupW + groupW / 2).toFixed(1)}" y="${h - 10}" class="trend-month-label" text-anchor="middle">${esc(label)}</text>`;
+    }).join("");
+
+    return `<svg viewBox="0 0 ${w} ${h}" class="trend-svg mom-svg" role="img" aria-label="Projects new vs completed vs on-hold, by month">
+      <line x1="${padL}" y1="${padT + innerH}" x2="${w - padR}" y2="${padT + innerH}" class="mom-axis"></line>
+      ${bars}
+      ${labels}
+    </svg>
+    <div class="bar-chart-legend muted">
+      <span class="legend-dot mom-new"></span> New (started this month) &nbsp;
+      <span class="legend-dot mom-completed"></span> Completed (ended this month, status Completed) &nbsp;
+      <span class="legend-dot mom-onhold"></span> On hold (current total, shown as of the selected date only — see note below)
+    </div>`;
+  }
+
+  // Insights-summary panel (Item I) — three small click-through cards, one
+  // per Insights sub-view, each with a headline stat + a muted secondary
+  // line. See computeInsightsSummary() for the full date-scoping and
+  // anti-duplication reasoning.
+  function insightsSummaryHtml(s) {
+    return `
+      <div class="panel insights-summary-panel">
+        <h2>Insights summary <span class="muted">— as of ${esc(fmtDate(s.asOf))}</span></h2>
+        <p class="muted">Headline figures from the Insights tab's three views — click a card to open the full view. Over/under-allocation and at-risk project names are already itemised in <a href="#" data-action="scroll-to" data-target="attentionPanel">Needs attention</a> below, so aren't repeated here.</p>
+        <div class="insight-summary-grid">
+          <button type="button" class="insight-summary-card clickable" data-action="goto" data-tab="insights" data-subtab="utilisation">
+            <div class="insight-summary-head">Utilisation</div>
+            <div class="insight-summary-stat">${s.medianUtil == null ? "—" : s.medianUtil + "%"}</div>
+            <div class="insight-summary-stat-label muted">median utilisation, this month</div>
+            <div class="insight-summary-sub muted">${s.healthyUtilCount} healthy &middot; ${s.overCount} over &middot; ${s.underCount} under</div>
+          </button>
+          <button type="button" class="insight-summary-card clickable" data-action="goto" data-tab="insights" data-subtab="health">
+            <div class="insight-summary-head">Project health</div>
+            <div class="insight-summary-stat">${s.avgHealthScore == null ? "—" : s.avgHealthScore + "%"}</div>
+            <div class="insight-summary-stat-label muted">avg score (median ${s.medianHealthScore == null ? "—" : s.medianHealthScore + "%"})</div>
+            <div class="insight-summary-sub muted">${s.okCount} healthy &middot; ${s.criticalCount} critical &middot; ${s.reviewCount} needs review</div>
+          </button>
+          <button type="button" class="insight-summary-card clickable" data-action="goto" data-tab="insights" data-subtab="summary">
+            <div class="insight-summary-head">Project summary</div>
+            <div class="insight-summary-stat">${s.avgAllocPct == null ? "—" : s.avgAllocPct + "%"}</div>
+            <div class="insight-summary-stat-label muted">avg allocation, staffed projects</div>
+            <div class="insight-summary-sub muted">${s.unstaffedCount} of ${s.projectsInScopeCount} in-scope projects unstaffed this month</div>
+          </button>
+        </div>
+      </div>`;
+  }
+
+  // Executive summary panel (Item J, reorganized) — plain, factual,
+  // auto-generated sentences built from computeExecSummary()'s output.
+  // Every clause below is a template around real computed data (counts,
+  // names, dates, note excerpts) — nothing here is hand-written example
+  // copy.
+  //
+  // Reorganized into three clearly separated columns, one content type
+  // each, instead of the previous two-column version that ran "next steps"
+  // and "risks/notes" together in one block:
+  //   Accomplishments — what happened (completed/launched/back-from-leave).
+  //   Next steps      — what's in flight (active/upcoming), purely forward-
+  //                      looking, no risk language mixed in.
+  //   Risks & notes    — at-risk project count + the notable-notes excerpts,
+  //                      kept apart so a reader scanning for "what's on
+  //                      fire" doesn't have to pick it out of a narrative
+  //                      paragraph.
+  // This is deliberately a *narrative* companion to the numeric
+  // insightsSummaryHtml() panel above it (counts/medians/click-through
+  // cards) — Exec summary reads like a status update, Insights summary
+  // reads like a dashboard; the two aren't meant to duplicate each other.
+  function execSummaryHtml(x) {
+    const asOfLabel = fmtDate(x.asOf);
+    function nameList(arr, max) {
+      if (!arr.length) return "";
+      const shown = arr.slice(0, max).map((p) => esc(p.name)).join(", ");
+      const rest = arr.length - Math.min(arr.length, max);
+      return shown + (rest > 0 ? ` (+${rest} more)` : "");
+    }
+
+    const accBits = [];
+    accBits.push(x.completedRecent.length
+      ? `<b>${x.completedRecent.length}</b> project${x.completedRecent.length === 1 ? "" : "s"} completed in ${esc(x.quarterLabel)}: ${nameList(x.completedRecent, 4)}.`
+      : `No projects completed in ${esc(x.quarterLabel)}.`);
+    if (x.newlyLaunched.length) {
+      accBits.push(`<b>${x.newlyLaunched.length}</b> new project${x.newlyLaunched.length === 1 ? "" : "s"} launched in ${esc(x.quarterLabel)}: ${nameList(x.newlyLaunched, 4)}.`);
+    }
+    if (x.backFromLeave.length) {
+      accBits.push(`<b>${x.backFromLeave.length}</b> resource${x.backFromLeave.length === 1 ? "" : "s"} back from leave this month: ${x.backFromLeave.map((r) => esc(r.name)).join(", ")}.`);
+    }
+
+    const nsBits = [];
+    nsBits.push(`<b>${x.activeProjects.length}</b> project${x.activeProjects.length === 1 ? "" : "s"} active as of ${esc(asOfLabel)}${x.activeProjects.length ? `: ${nameList(x.activeProjects, 5)}` : ""}.`);
+    nsBits.push(x.upcomingProjects.length
+      ? `<b>${x.upcomingProjects.length}</b> project${x.upcomingProjects.length === 1 ? "" : "s"} scheduled to start after ${esc(asOfLabel)}: ${nameList(x.upcomingProjects, 4)}.`
+      : `Nothing scheduled to start after ${esc(asOfLabel)}.`);
+
+    const riskBits = [];
+    riskBits.push(x.atRiskProjects.length
+      ? `<b>${x.atRiskProjects.length}</b> active project${x.atRiskProjects.length === 1 ? "" : "s"} flagged critical or needing review — see <a href="#" data-action="scroll-to" data-target="attentionPanel">Needs attention</a> below for names and scores.`
+      : `No active projects are currently flagged critical or needing review.`);
+
+    const notesHtml = x.notableNotes.length
+      ? `<div class="exec-notes">
+          <div class="exec-notes-label">Notable updates:</div>
+          <ul class="exec-notes-list">${x.notableNotes.map((n) => `<li><b>${esc(n.name)}:</b> ${esc(n.excerpt)}</li>`).join("")}</ul>
+        </div>`
+      : `<p class="muted exec-notes-empty">No project notes to surface for this period.</p>`;
+
+    return `
+      <div class="panel exec-summary-panel">
+        <h2>Executive summary <span class="muted">— auto-generated, as of ${esc(asOfLabel)}</span></h2>
+        <p class="muted">Narrative status update — accomplishments, next steps, and risks. For headline numbers, see Insights summary above; for the full itemised list, see Needs attention below.</p>
+        <div class="exec-summary-grid">
+          <div class="exec-summary-col">
+            <div class="exec-summary-label">✅ Accomplishments <span class="muted">— ${esc(x.quarterLabel)}</span></div>
+            ${accBits.map((b) => `<p class="exec-summary-line">${b}</p>`).join("")}
+          </div>
+          <div class="exec-summary-col">
+            <div class="exec-summary-label">▶ Next steps <span class="muted">— as of ${esc(asOfLabel)}</span></div>
+            ${nsBits.map((b) => `<p class="exec-summary-line">${b}</p>`).join("")}
+          </div>
+          <div class="exec-summary-col exec-summary-col-risk">
+            <div class="exec-summary-label">⚠ Risks &amp; notes</div>
+            ${riskBits.map((b) => `<p class="exec-summary-line">${b}</p>`).join("")}
+            ${notesHtml}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // ---------------------------------------------------------------------
+  // COMPUTE: Needs-attention — Projects & Resources (Dashboard bottom
+  // panel). Replaces the old always-"this month" version: every trigger
+  // below is a function of the as-of month index passed in, so the whole
+  // panel recomputes whenever the Dashboard's date filter (DASHBOARD_ASOF)
+  // changes, same as every other Dashboard figure.
+  //
+  // Thresholds are named constants, deliberately grouped here so they're
+  // easy to find and retune later without touching the logic around them —
+  // sensible defaults per the spec, not tuned against this seed data:
+  // ---------------------------------------------------------------------
+  const ATTN_RESOURCE_OVERALLOC_PCT = 100;   // utilisation % strictly ABOVE this = "over-allocated"
+  const ATTN_RESOURCE_IDLE_PCT = 50;         // utilisation % strictly BELOW this (incl. 0%) = "idle / significantly under-allocated"
+  const ATTN_ACTUAL_VS_PLANNED_GAP_PCT = 20; // |actual% − planned%| ABOVE this = "large plan/actual gap" — only for months with an actuals import (see actualVsPlannedGapForResource)
+  const ATTN_LARGE_HOLIDAY_NOTE_DAYS = 5;    // a single month's logged holiday/PTO note of this many days or more = "large holiday note" (one working week)
+
+  // Resources needing attention, for one FY month index.
+  function computeResourcesNeedingAttention(mIdx) {
+    const items = [];
+    computeUtilisation().forEach((u) => {
+      const m = u.monthly[mIdx];
+      if (m.util != null) {
+        if (m.util > ATTN_RESOURCE_OVERALLOC_PCT) {
+          items.push({ kind: "Over-allocated", cls: "sev-over", icon: "🔺", name: u.resource.name, value: `${m.util}%`, highlight: `res-${u.resource.id}`, sortKey: 100 + m.util });
+        } else if (m.util < ATTN_RESOURCE_IDLE_PCT) {
+          items.push({ kind: "Idle / under-allocated", cls: "sev-under", icon: "🔻", name: u.resource.name, value: `${m.util}%`, highlight: `res-${u.resource.id}`, sortKey: 100 - m.util });
+        }
+      }
+      const note = u.resource.capNotes && u.resource.capNotes[mIdx];
+      if (note && Number.isFinite(note.days) && note.days >= ATTN_LARGE_HOLIDAY_NOTE_DAYS) {
+        items.push({ kind: "Large holiday/PTO note", cls: "sev-leave", icon: "🏖", name: u.resource.name, value: `${note.days}d`, highlight: `res-${u.resource.id}`, sortKey: 50 + note.days });
+      }
+      const gap = actualVsPlannedGapForResource(u.resource, mIdx);
+      if (gap && gap.gap > ATTN_ACTUAL_VS_PLANNED_GAP_PCT) {
+        items.push({
+          kind: "Actual vs planned gap", cls: gap.actualUtil > gap.plannedUtil ? "sev-over" : "sev-under", icon: "📉",
+          name: u.resource.name, value: `${gap.gap}pp`,
+          detail: `${gap.actualUtil}% actual vs ${gap.plannedUtil}% planned (${gap.gap}pp gap)`,
+          highlight: `res-${u.resource.id}`, sortKey: 100 + gap.gap,
+        });
+      }
+    });
+    return items.sort((a, b) => b.sortKey - a.sortKey);
+  }
+
+  // Projects needing attention, for one FY month index — "in scope" is the
+  // same projectInMonth() date-window every other Dashboard project figure
+  // already uses (see computeDashboard's projectsAsOf).
+  function computeProjectsNeedingAttention(mIdx) {
+    const items = [];
+    const projectsAsOf = STATE.projects.filter((p) => projectInMonth(p, mIdx));
+    computeProjectHealth().forEach((h) => {
+      if (!projectInMonth(h.project, mIdx)) return;
+      const m = h.monthly[mIdx];
+      if (m.flag === "C") {
+        items.push({ kind: "Critical", cls: "sev-critical", icon: "⛔", name: h.project.name, value: `${m.score}%`, highlight: `proj-${h.project.id}`, sortKey: 300 });
+      } else if (m.flag === "R") {
+        items.push({ kind: "Needs review", cls: "sev-review", icon: "⚠", name: h.project.name, value: `${m.score}%`, highlight: `proj-${h.project.id}`, sortKey: 200 });
+      }
+    });
+    projectsAsOf.forEach((p) => {
+      const shortfall = projectRoleFillCounts(p).filter((r) => r.assigned < r.needed);
+      if (shortfall.length) {
+        items.push({
+          kind: "Understaffed roles", cls: "sev-review", icon: "🧩", name: p.name,
+          value: `${shortfall.length} role${shortfall.length === 1 ? "" : "s"} short`, highlight: `proj-${p.id}`, sortKey: 150,
+        });
+      }
+      if (p.status === "On Hold") {
+        items.push({ kind: "On hold", cls: "sev-review", icon: "⏸", name: p.name, value: "On hold", highlight: `proj-${p.id}`, sortKey: 120 });
+      }
+      if (p.status === "Active" && !allocsForProject(p.id).length) {
+        items.push({ kind: "No allocations", cls: "sev-critical", icon: "🚫", name: p.name, value: "Unstaffed", highlight: `proj-${p.id}`, sortKey: 250 });
+      }
+    });
+    return items.sort((a, b) => b.sortKey - a.sortKey);
   }
 
   // ---------------------------------------------------------------------
@@ -1251,22 +2180,21 @@
   function groupLabel(g) { return GROUP_LABELS[g] || g; }
 
   function viewDashboard() {
-    const d = computeDashboard();
+    const d = computeDashboard(DASHBOARD_ASOF);
     const curLabel = STATE.months[d.mIdx].label;
+    // Item I — Insights-tab summary panel; Item J — narrative executive
+    // summary. Both are computed alongside d (and, for the exec summary,
+    // from d's own critical/review split) so every figure on the page
+    // ultimately traces back to computeDashboard(DASHBOARD_ASOF) plus
+    // these two siblings, never a second independent read of state.
+    const insightsSummary = computeInsightsSummary(DASHBOARD_ASOF);
+    const execSummary = computeExecSummary(DASHBOARD_ASOF, d);
 
-    // Needs-attention is categorized by type — projects vs. resources —
-    // rather than interleaved, and every row routes to the tab/row that
-    // explains the number (Insights, correct sub-tab, row highlighted).
-    const projectItems = [
-      ...d.critical.map((h) => ({ kind: "Critical", cls: "sev-critical", icon: "⛔", name: h.project.name, value: `${h.monthly[d.mIdx].score}%`, highlight: `proj-${h.project.id}` })),
-      ...d.review.map((h) => ({ kind: "Needs review", cls: "sev-review", icon: "⚠", name: h.project.name, value: `${h.monthly[d.mIdx].score}%`, highlight: `proj-${h.project.id}` })),
-    ];
-    const resourceItems = [
-      ...d.over.sort((a, b) => b.monthly[d.mIdx].util - a.monthly[d.mIdx].util)
-        .map((u) => ({ kind: "Over-allocated", cls: "sev-over", icon: "🔺", name: u.resource.name, value: `${u.monthly[d.mIdx].util}%`, highlight: `res-${u.resource.id}` })),
-      ...d.under.sort((a, b) => a.monthly[d.mIdx].util - b.monthly[d.mIdx].util)
-        .map((u) => ({ kind: "Under-utilised", cls: "sev-under", icon: "🔻", name: u.resource.name, value: `${u.monthly[d.mIdx].util}%`, highlight: `res-${u.resource.id}` })),
-    ];
+    // Needs-attention — projects and resources, both as-of-date-scoped (see
+    // computeProjectsNeedingAttention / computeResourcesNeedingAttention
+    // above), each row routing to the tab/row that explains the number.
+    const projectItems = computeProjectsNeedingAttention(d.mIdx);
+    const resourceItems = computeResourcesNeedingAttention(d.mIdx);
 
     // Needs-attention — card grid (not a plain list): each issue is its own
     // small card with a coloured left edge + icon, matching the app's
@@ -1277,7 +2205,7 @@
       const shown = items.slice(0, max);
       const hidden = items.length - shown.length;
       return shown.map((a) => `
-          <button type="button" class="attn-card ${a.cls} clickable" data-action="goto" data-tab="insights" data-subtab="${subtab}" data-highlight="${a.highlight}">
+          <button type="button" class="attn-card ${a.cls} clickable" data-action="goto" data-tab="insights" data-subtab="${subtab}" data-highlight="${a.highlight}" title="${esc(a.detail || a.name)}">
             <span class="attn-icon">${a.icon}</span>
             <span class="attn-card-body">
               <span class="attn-kind">${esc(a.kind)}</span>
@@ -1289,25 +2217,25 @@
             : "");
     }
 
-    const statusChips = STATUS_OPTIONS.map(
-      (s) => `<button type="button" class="kpi-chip clickable" data-action="goto" data-tab="projects" data-status-filter="${esc(s)}">
+    // Item E — Projects by status, redesigned as a minimal vertical stack
+    // (was a horizontal row of chips). Each row is still numbers-only and
+    // still routes to Projects pre-filtered to that status via goToTab's
+    // existing statusFilter deep-link — same click-through mechanism the
+    // old horizontal chips used, just restacked vertically per spec. Counts
+    // are date-scoped to the Item A "as of" filter (see computeDashboard's
+    // projectsAsOf), so this list's numbers move when the date filter does.
+    const statusStackRows = STATUS_OPTIONS.map(
+      (s) => `<button type="button" class="status-stack-row clickable" data-action="goto" data-tab="projects" data-status-filter="${esc(s)}">
           <span class="status-pill ${{
             Active: "st-active", Planning: "st-planning", Pipeline: "st-pipeline",
             "On Hold": "st-hold", Completed: "st-completed",
-          }[s]}">${s}</span><b>${d.statusCounts[s] || 0}</b>
+          }[s]}">${esc(s)}</span>
+          <b class="status-stack-count">${d.statusCounts[s] || 0}</b>
         </button>`
     ).join("");
 
-    const leaveRows = d.leave.length
-      ? d.leave.map((l) => `
-          <button type="button" class="attn-card sev-leave clickable" data-action="goto" data-tab="resources" data-highlight="res-${l.resource.id}">
-            <span class="attn-icon">🌴</span>
-            <span class="attn-card-body">
-              <span class="attn-kind">${esc(l.note.type || "Leave")}</span>
-              <span class="attn-name">${esc(l.resource.name)}${l.note.days ? ` — ${esc(l.note.days)} day${l.note.days == 1 ? "" : "s"}` : ""}${l.note.note ? `<span class="muted"> · ${esc(l.note.note)}</span>` : ""}</span>
-            </span>
-          </button>`).join("")
-      : `<div class="attn-card sev-none">No planned or public holidays logged for ${esc(curLabel)} yet. Click the note icon (<span class="legend-dot note-dot"></span>) on any month cell in Resources to add one.</div>`;
+    // Item F — MoM new/completed/on-hold project trend chart.
+    const momChart = momTrendSvg(d.momTrend, STATE.months);
 
     // Billable vs non-billable, by project group (item 3) — Core excluded
     // (always non-billable by definition, so it carries no signal here).
@@ -1337,12 +2265,36 @@
         <p class="muted">${esc(STATE.meta.fyLabel)} &middot; showing <b>${esc(curLabel)}</b> as the current month &middot; ${d.totalResources} resources across ${d.totalProjects} projects</p>
       </div>
 
+      <div class="panel dash-filter-panel">
+        <div class="dash-filter-row">
+          <label class="dash-filter-label" for="dashAsOfInput">Dashboard as of
+            <input type="date" id="dashAsOfInput" class="dash-filter-input" value="${esc(d.asOf)}">
+          </label>
+          <button type="button" class="btn btn-ghost btn-xs" data-action="dash-asof-today">Today</button>
+          <span class="muted">Every figure below — KPIs, charts, status breakdown — is computed as of <b>${esc(fmtDate(d.asOf))}</b> (FY month: <b>${esc(curLabel)}</b>), not necessarily today's real date.</span>
+        </div>
+      </div>
+
       <div class="kpi-grid kpi-hero">
         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="resources">
           <div class="kpi-label">Resources</div><div class="kpi-value">${d.totalResources}</div>
         </button>
         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="Active">
-          <div class="kpi-label">Active projects</div><div class="kpi-value">${d.activeProjectCount}</div><div class="kpi-sub muted">of ${d.totalProjects} total</div>
+          <div class="kpi-label">Active projects</div><div class="kpi-value">${d.activeProjectCount}</div><div class="kpi-sub muted">as of ${esc(curLabel)}</div>
+        </button>
+        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="All" data-project-billable="true">
+          <div class="kpi-label">Billable projects</div><div class="kpi-value">${d.billableCount}</div><div class="kpi-sub muted">${d.billablePct}% as of ${esc(curLabel)}</div>
+        </button>
+        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="All" data-project-billable="false">
+          <div class="kpi-label">Non-billable projects</div><div class="kpi-value">${d.nonBillableCount}</div><div class="kpi-sub muted">${d.nonBillablePct}% as of ${esc(curLabel)}</div>
+        </button>
+        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="actuals">
+          <div class="kpi-label">Billable hours <span class="src-pill src-pill-${d.billableHoursThisMonth.source}">${d.billableHoursThisMonth.source === "actual" ? "Actual" : "Planned (est.)"}</span></div>
+          <div class="kpi-value">${d.billableHoursThisMonth.billableHours}h</div><div class="kpi-sub muted">${esc(curLabel)}</div>
+        </button>
+        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="actuals">
+          <div class="kpi-label">Non-billable hours <span class="src-pill src-pill-${d.billableHoursThisMonth.source}">${d.billableHoursThisMonth.source === "actual" ? "Actual" : "Planned (est.)"}</span></div>
+          <div class="kpi-value">${d.billableHoursThisMonth.nonBillableHours}h</div><div class="kpi-sub muted">${esc(curLabel)}</div>
         </button>
         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="insights" data-subtab="utilisation">
           <div class="kpi-label">Avg utilisation</div><div class="kpi-value">${d.avgUtilThisMonth == null ? "—" : d.avgUtilThisMonth + "%"}</div><div class="kpi-sub muted">this month</div>
@@ -1353,8 +2305,8 @@
         <button type="button" class="kpi-card clickable" data-action="scroll-to" data-target="attentionPanel">
           <div class="kpi-label">Needs attention</div><div class="kpi-value">${projectItems.length + resourceItems.length}</div><div class="kpi-sub muted">projects + resources</div>
         </button>
-        <button type="button" class="kpi-card clickable" data-action="scroll-to" data-target="leavePanel">
-          <div class="kpi-label">On leave this month</div><div class="kpi-value">${d.leave.length}</div>
+        <button type="button" class="kpi-card clickable" data-action="goto" data-tab="resources">
+          <div class="kpi-label">Leave days this month</div><div class="kpi-value">${d.leaveDays}</div><div class="kpi-sub muted">total days logged, ${esc(curLabel)}</div>
         </button>
       </div>
 
@@ -1366,35 +2318,42 @@
         </div>
         <div class="panel chart-panel">
           <h2>Utilisation trend — ${esc(STATE.meta.fyLabel)}</h2>
-          <p class="muted">Average utilisation % across every resource, month by month. <span class="legend-dot" style="background:var(--brand)"></span> current month.</p>
-          ${utilTrendSvg(d.monthlyAvgUtil, STATE.months, d.mIdx)}
+          <p class="muted">Total, billable-work, and non-billable-work utilisation % across every resource, month by month, against actual average available capacity (holiday-adjusted). <span class="legend-dot" style="background:var(--brand)"></span> as-of month. Billable/non-billable points are <b>Actual</b> (filled dot) for any month with an imported actuals file, <b>Planned estimate</b> (hollow dot) otherwise.</p>
+          ${utilTrendSvg({ total: d.monthlyAvgUtil, billable: d.monthlyBillableUtil, nonBillable: d.monthlyNonBillableUtil, capacity: d.monthlyAvgCap, billableSource: d.monthlyBillableSource }, STATE.months, d.mIdx)}
         </div>
       </div>
 
-      <div class="panel" id="attentionPanel">
-        <h2>Needs attention this month</h2>
-        <div class="attn-group-label">Projects <span class="muted">(${projectItems.length})</span></div>
-        <div class="attn-grid">${renderAttnGroup(projectItems, "health", 4)}</div>
-        <div class="attn-group-label">Resources <span class="muted">(${resourceItems.length})</span></div>
-        <div class="attn-grid">${renderAttnGroup(resourceItems, "utilisation", 4)}</div>
-      </div>
-
-      <div class="panel" id="leavePanel">
-        <h2>Planned &amp; public holidays — ${esc(curLabel)}</h2>
-        <div class="attn-grid">${leaveRows}</div>
+      <div class="panel chart-panel">
+        <h2>Projects — new vs completed vs on hold <span class="muted">— ${esc(STATE.meta.fyLabel)}, through ${esc(curLabel)}</span></h2>
+        ${momChart}
+        <p class="mom-summary">${d.momSummaryText}</p>
+        <p class="muted mom-note">Note on method: "New" = project start date falls in that month. "Completed" = project's current status is Completed and its end date falls in that month (used as a proxy — this data model has no "status changed on" timestamp). "On hold" has no date signal at all, so rather than invent one, the current on-hold total is shown only as a snapshot in the as-of month's bar, not spread across prior months.</p>
       </div>
 
       <div class="grid-2">
         <div class="panel">
-          <h2>Projects by status <span class="muted">— click to filter</span></h2>
-          <div class="kpi-chip-row">${statusChips}</div>
+          <h2>Projects by status <span class="muted">— as of ${esc(curLabel)}, click to filter</span></h2>
+          <div class="status-stack">${statusStackRows}</div>
         </div>
 
         <div class="panel">
           <h2>Billable vs non-billable <span class="muted">— by group</span></h2>
-          <p class="muted">Overall: <b>${d.billableCount}</b> billable (${d.totalProjects ? round(d.billableCount / d.totalProjects * 100, 0) : 0}%) &middot; <b>${d.nonBillableCount}</b> non-billable. Core excluded below — it's always non-billable by definition, so it adds no signal to this breakdown.</p>
+          <p class="muted">Overall as of ${esc(curLabel)}: <b>${d.billableCount}</b> billable (${d.billablePct}%) &middot; <b>${d.nonBillableCount}</b> non-billable. Core excluded below — it's always non-billable by definition, so it adds no signal to this breakdown.</p>
           <div class="billing-group-grid">${billingGroupCards}</div>
         </div>
+      </div>
+
+      ${insightsSummaryHtml(insightsSummary)}
+
+      ${execSummaryHtml(execSummary)}
+
+      <div class="panel" id="attentionPanel">
+        <h2>Needs attention <span class="muted">— as of ${esc(curLabel)}</span></h2>
+        <p class="muted">Recomputes with the date filter above. Thresholds — over-allocated &gt;${ATTN_RESOURCE_OVERALLOC_PCT}% &middot; idle &lt;${ATTN_RESOURCE_IDLE_PCT}% &middot; plan/actual gap &gt;${ATTN_ACTUAL_VS_PLANNED_GAP_PCT}pp (months with an actuals import only) &middot; large holiday note &ge;${ATTN_LARGE_HOLIDAY_NOTE_DAYS} days — all easy to retune, see ATTN_* constants.</p>
+        <div class="attn-group-label">Projects needing attention <span class="muted">(${projectItems.length})</span></div>
+        <div class="attn-grid">${renderAttnGroup(projectItems, "health", 6)}</div>
+        <div class="attn-group-label">Resources needing attention <span class="muted">(${resourceItems.length})</span></div>
+        <div class="attn-grid">${renderAttnGroup(resourceItems, "utilisation", 6)}</div>
       </div>
     `;
   }
@@ -1793,6 +2752,110 @@
   }
 
   // ---------------------------------------------------------------------
+  // View: Actuals — "Import Actual Hours" (OpenAir Excel import) + a
+  // read-only table of everything imported so far. The heavy lifting
+  // (upload, parse preview, review/edit billable classification, confirm)
+  // lives in openImportActualsModal() below; this view is just the entry
+  // point button plus the same sortable/filterable table pattern used
+  // everywhere else in the app (TABLE_SORT/TABLE_FILTER/thSort/colGroupHtml).
+  // ---------------------------------------------------------------------
+  const ACTUALS_TABLE = "actuals";
+  function actualsMonthLabel(idx) {
+    if (idx == null) return "—";
+    const m = STATE.months[idx];
+    return m ? m.label : `Month ${idx + 1}`;
+  }
+
+  function viewActuals() {
+    let rows = applyFilters(ACTUALS_TABLE, ACTUALS, {
+      resourceId: (a, v) => a.resourceId === v,
+      projectId: (a, v) => a.projectId === v,
+      month: (a, v) => String(a.month) === v,
+      billable: (a, v) => String(!!a.billable) === v,
+      sourceFile: (a, v) => contains(a.sourceFile, v),
+    });
+    rows = applySort(ACTUALS_TABLE, rows, {
+      resourceName: (a) => a.resourceName,
+      projectName: (a) => a.projectName,
+      month: (a) => a.month,
+      hours: (a) => a.hours,
+      billable: (a) => (a.billable ? 1 : 0),
+      importedAt: (a) => a.importedAt,
+      sourceFile: (a) => a.sourceFile,
+    });
+
+    const rowsHtml = rows.map((a) => `
+      <tr>
+        <td>${esc(a.resourceName)}</td>
+        <td>${esc(a.projectName)}</td>
+        <td>${esc(actualsMonthLabel(a.month))}</td>
+        <td>${round(a.hours, 1)}</td>
+        <td>${a.billable ? '<span class="status-pill st-billable">Billable</span>' : '<span class="status-pill st-nonbillable">Non-billable</span>'}</td>
+        <td>${esc(fmtTs(a.importedAt))}</td>
+        <td class="muted">${esc(a.sourceFile || "—")}</td>
+      </tr>`).join("");
+
+    const resourceOptions = STATE.resources.slice().sort((a, b) => a.name.localeCompare(b.name)).map((r) => ({ value: r.id, label: r.name }));
+    const projectOptions = STATE.projects.slice().sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({ value: p.id, label: p.name }));
+    const monthOptions = STATE.months.map((m, i) => ({ value: String(i), label: m.label }));
+
+    const actualsColumns = [
+      { key: "resourceName", label: "Resource", hideable: true },
+      { key: "projectName", label: "Project", hideable: true },
+      { key: "month", label: "Month", hideable: true },
+      { key: "hours", label: "Hours", hideable: true },
+      { key: "billable", label: "Billable", hideable: true },
+      { key: "importedAt", label: "Imported At", hideable: true },
+      { key: "sourceFile", label: "Source File", hideable: true },
+    ];
+
+    const totalHours = round(ACTUALS.reduce((s, a) => s + num(a.hours, 0), 0), 1);
+    const lastImport = ACTUALS.length ? ACTUALS.reduce((latest, a) => (a.importedAt > latest ? a.importedAt : latest), ACTUALS[0].importedAt) : null;
+
+    return `
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Actuals — imported hours (from OpenAir Excel exports)</h2>
+          <button class="btn btn-primary" data-action="open-import-actuals">⬆ Import Actual Hours</button>
+        </div>
+        <p class="muted">Upload an OpenAir timesheet export (.xlsx). Rows are matched to existing Resources/Projects by name, aggregated by resource × project × month, and reviewed before anything is committed — including a chance to flip any project's billable/non-billable classification.</p>
+        <div class="kpi-chip-row" style="margin-bottom:12px;">
+          <span class="kpi-chip">${ACTUALS.length} row${ACTUALS.length === 1 ? "" : "s"} imported</span>
+          <span class="kpi-chip">${totalHours}h total</span>
+          ${lastImport ? `<span class="kpi-chip">Last import: ${esc(fmtTs(lastImport))}</span>` : ""}
+        </div>
+        <div class="table-toolbar">
+          <span class="muted">Click a column header to sort. Use the boxes under the headers to filter.</span>
+          <div class="table-toolbar-actions">
+            ${columnPickerHtml(ACTUALS_TABLE, actualsColumns)}
+            ${hasActiveFilters(ACTUALS_TABLE) || TABLE_SORT[ACTUALS_TABLE] ? `<button class="btn btn-ghost btn-xs" data-action="clear-table" data-table="${ACTUALS_TABLE}">✕ Clear sort &amp; filters</button>` : ""}
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table class="grid-table">
+            ${colGroupHtml(ACTUALS_TABLE, actualsColumns)}
+            <thead>
+              <tr>
+                ${thSort(ACTUALS_TABLE, "resourceName", "Resource")}${thSort(ACTUALS_TABLE, "projectName", "Project")}${thSort(ACTUALS_TABLE, "month", "Month")}${thSort(ACTUALS_TABLE, "hours", "Hours")}${thSort(ACTUALS_TABLE, "billable", "Billable")}${thSort(ACTUALS_TABLE, "importedAt", "Imported At")}${thSort(ACTUALS_TABLE, "sourceFile", "Source File")}
+              </tr>
+              <tr class="filter-row-cells">
+                <td>${filterSelectInputLabeled(ACTUALS_TABLE, "resourceId", resourceOptions, "All resources")}</td>
+                <td>${filterSelectInputLabeled(ACTUALS_TABLE, "projectId", projectOptions, "All projects")}</td>
+                <td>${filterSelectInputLabeled(ACTUALS_TABLE, "month", monthOptions, "All months")}</td>
+                <td></td>
+                <td>${filterSelectInputLabeled(ACTUALS_TABLE, "billable", [{ value: "true", label: "Billable" }, { value: "false", label: "Non-billable" }], "All")}</td>
+                <td></td>
+                <td>${filterTextInput(ACTUALS_TABLE, "sourceFile", "Filter file…")}</td>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml || `<tr><td colspan="7" class="muted center">${ACTUALS.length ? "No imported rows match this filter." : "No actual hours imported yet — click “Import Actual Hours” to get started."}</td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  // ---------------------------------------------------------------------
   // View: Utilisation (results)
   // ---------------------------------------------------------------------
   const UTIL_TABLE = "utilisation";
@@ -1827,7 +2890,24 @@
       { key: "status", label: "Status", hideable: true },
     ];
 
+    // Planned vs Actual chart — scoped to the Dashboard's "as of" filter
+    // (DASHBOARD_ASOF) the same way every other date-reactive figure in the
+    // app already is, trailing PLANNED_VS_ACTUAL_TRAILING_MONTHS months
+    // ending at that month (the Insights tab has no month-range control of
+    // its own to defer to). Only draws real bars for months an actuals
+    // import actually covers — see plannedVsActualSvg's own comment.
+    const pvaAsOfMIdx = monthIndexForDate(DASHBOARD_ASOF);
+    const pvaRange = defaultPlannedVsActualRange(pvaAsOfMIdx);
+    const pvaRows = computePlannedVsActualUtil(pvaRange);
+    const pvaPanel = `
+      <div class="panel chart-panel">
+        <h2>Planned vs Actual utilisation <span class="muted">— trailing ${pvaRows.length} month${pvaRows.length === 1 ? "" : "s"}, through ${esc(STATE.months[pvaAsOfMIdx].label)}</span></h2>
+        <p class="muted">Planned = allocated % ÷ capacity, averaged across resources (same figure as the table below). Actual = imported hours (Actuals tab) ÷ capacity, for any month with a completed import. Months with nothing imported yet show as "no data", not 0%.</p>
+        ${plannedVsActualSvg(pvaRows)}
+      </div>`;
+
     return `
+      ${pvaPanel}
       <div class="panel">
         <h2>Utilisation <span class="muted">— auto-calculated, do not edit</span></h2>
         <p class="muted">Util % = Allocated % ÷ Available Capacity % × 100. &nbsp; <span class="legend-dot cell-red"></span> &gt;100% over &nbsp; <span class="legend-dot cell-green"></span> 70–100% healthy &nbsp; <span class="legend-dot cell-blue"></span> &lt;70% under-utilised.</p>
@@ -2213,6 +3293,7 @@
     { id: "resources", label: "Resources", render: viewResources },
     { id: "projects", label: "Projects", render: viewProjects },
     { id: "allocations", label: "Allocations", render: viewAllocations },
+    { id: "actuals", label: "Actuals", render: viewActuals },
     { id: "insights", label: "Insights", render: viewInsights },
   ];
   const HEADER_TABS = [{ id: "data", label: "Data", render: viewData }];
@@ -2331,6 +3412,24 @@
       menu.addEventListener("click", (e) => e.stopPropagation());
     });
 
+    // Item A — Dashboard "as of" date filter. Changing it (or hitting
+    // "Today") just updates the module-level DASHBOARD_ASOF and re-renders;
+    // computeDashboard(DASHBOARD_ASOF) does the rest, so every KPI/chart/
+    // breakdown on the Dashboard picks up the new date on the next render.
+    const asOfInput = view.querySelector("#dashAsOfInput");
+    if (asOfInput) {
+      asOfInput.addEventListener("change", () => {
+        DASHBOARD_ASOF = asOfInput.value || todayISO();
+        render();
+      });
+    }
+    view.querySelectorAll('[data-action="dash-asof-today"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        DASHBOARD_ASOF = todayISO();
+        render();
+      });
+    });
+
     // Dashboard links — KPI cards, attention rows, status chips: every one
     // of these routes to the tab (and row) that explains the number.
     view.querySelectorAll('[data-action="goto"]').forEach((btn) => {
@@ -2384,6 +3483,7 @@
     view.querySelectorAll('[data-action="add-resource"]').forEach((b) => b.addEventListener("click", addResource));
     view.querySelectorAll('[data-action="add-project"]').forEach((b) => b.addEventListener("click", addProject));
     view.querySelectorAll('[data-action="add-allocation"]').forEach((b) => b.addEventListener("click", openAddAssignmentModal));
+    view.querySelectorAll('[data-action="open-import-actuals"]').forEach((b) => b.addEventListener("click", openImportActualsModal));
     view.querySelectorAll('[data-action="delete-resource"]').forEach((b) => b.addEventListener("click", () => deleteResource(b.dataset.id)));
     view.querySelectorAll('[data-action="delete-project"]').forEach((b) => b.addEventListener("click", () => deleteProject(b.dataset.id)));
     view.querySelectorAll('[data-action="delete-allocation"]').forEach((b) => b.addEventListener("click", () => deleteAllocation(b.dataset.id)));
@@ -3089,6 +4189,232 @@
       }
     });
   }
+
+  // ---------------------------------------------------------------------
+  // "Import Actual Hours" modal (Actuals tab) — upload an OpenAir .xlsx
+  // export, review the server's parsed/matched preview (including a chance
+  // to flip any project's billable/non-billable classification before
+  // anything is committed), then confirm. Three stages rendered into the
+  // same overlay: "upload" -> "parsing" -> "review" -> "done". Nothing is
+  // written to the DB until "Confirm Import" is clicked in the review stage
+  // — see POST /api/actuals/preview vs /api/actuals/confirm.
+  // ---------------------------------------------------------------------
+  function openImportActualsModal() {
+    let stage = "upload"; // upload | parsing | review | done
+    let uploadError = "";
+    let confirmError = "";
+    let preview = null; // server's /preview response
+    let billableOverrides = {}; // projectId -> boolean, only entries the user touched
+    let monthChoice = "";
+    let isBusy = false;
+    let result = null; // server's /confirm response
+
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    document.body.appendChild(overlay);
+
+    function close() {
+      if (isBusy) return;
+      overlay.remove();
+    }
+
+    async function uploadAndPreview(file) {
+      stage = "parsing";
+      uploadError = "";
+      paint();
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const res = await fetch(API_BASE + "/actuals/preview", { method: "POST", credentials: "same-origin", body: fd });
+        let data = null;
+        try { data = await res.json(); } catch (e) { /* empty/non-JSON body */ }
+        if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+        preview = data;
+        billableOverrides = {};
+        monthChoice = "";
+        stage = "review";
+      } catch (err) {
+        stage = "upload";
+        uploadError = err.message;
+      }
+      paint();
+    }
+
+    function paintUpload() {
+      return `
+        <div class="modal-box import-actuals-box" role="dialog" aria-modal="true">
+          <h3>Import Actual Hours</h3>
+          <p class="muted">Upload an OpenAir timesheet export (.xlsx). Resource, project, hours (and date, if present) columns are detected automatically — rows are matched to existing Resources/Projects by name and aggregated by resource × project × month before anything is saved.</p>
+          <div class="file-drop" id="iaDropZone">
+            <p class="muted">Drag &amp; drop a .xlsx file here, or</p>
+            <label class="btn btn-secondary file-btn">Choose file…<input type="file" id="iaFileInput" accept=".xlsx" hidden></label>
+          </div>
+          ${uploadError ? `<p class="txt-red ia-error">${esc(uploadError)}</p>` : ""}
+          <div class="btn-row modal-actions">
+            <button type="button" class="btn btn-ghost" id="iaCancel">Cancel</button>
+          </div>
+        </div>`;
+    }
+
+    function paintParsing() {
+      return `
+        <div class="modal-box import-actuals-box" role="dialog" aria-modal="true">
+          <h3>Import Actual Hours</h3>
+          <p class="muted">Parsing and matching rows against Resources/Projects…</p>
+        </div>`;
+    }
+
+    function paintReview() {
+      const p = preview;
+      const cols = Object.entries(p.detectedColumns || {}).filter(([, v]) => v)
+        .map(([k, v]) => `${k}: “${esc(v)}”`).join(" · ");
+      const projectsRows = p.distinctProjects.map((proj) => {
+        const cur = Object.prototype.hasOwnProperty.call(billableOverrides, proj.projectId) ? billableOverrides[proj.projectId] : proj.billable;
+        return `<tr data-project-id="${esc(proj.projectId)}">
+          <td>${esc(proj.projectName)}</td>
+          <td>
+            <select class="cell-input ia-billable-select" data-project-id="${esc(proj.projectId)}">
+              <option value="true" ${cur ? "selected" : ""}>Billable</option>
+              <option value="false" ${!cur ? "selected" : ""}>Non-billable</option>
+            </select>
+          </td>
+        </tr>`;
+      }).join("");
+
+      return `
+        <div class="modal-box import-actuals-box import-actuals-review" role="dialog" aria-modal="true">
+          <h3>Review import — ${esc(p.sourceFile)}</h3>
+          <div class="ia-summary-grid">
+            <div><b>${p.totalRowsParsed}</b> source row${p.totalRowsParsed === 1 ? "" : "s"} parsed</div>
+            <div><b>${p.matchedRowCount}</b> aggregated row${p.matchedRowCount === 1 ? "" : "s"} matched</div>
+            <div><b>${p.unmatchedRowCount}</b> aggregated row${p.unmatchedRowCount === 1 ? "" : "s"} unmatched (will be skipped)</div>
+          </div>
+          <p class="muted ia-cols">Detected columns — ${cols}</p>
+          ${p.warnings.length ? `<div class="ia-warnings">${p.warnings.map((w) => `<div>⚠ ${esc(w)}</div>`).join("")}</div>` : ""}
+          ${p.requiresMonthSelection ? `
+            <label class="modal-label">No usable date found in this file — pick which month these hours apply to
+              <select id="iaMonthSelect" class="cell-input">
+                <option value="">Select a month…</option>
+                ${STATE.months.map((m, i) => `<option value="${i}" ${String(i) === monthChoice ? "selected" : ""}>${esc(m.label)}</option>`).join("")}
+              </select>
+            </label>` : ""}
+          <h4 class="ia-subhead">Projects found in this import — review billable / non-billable</h4>
+          <div class="table-scroll ia-projects-scroll">
+            <table class="ia-projects-table">
+              <thead><tr><th>Project</th><th>Classification</th></tr></thead>
+              <tbody>${projectsRows || `<tr><td colspan="2" class="muted center">No matched projects in this file.</td></tr>`}</tbody>
+            </table>
+          </div>
+          ${(p.unmatchedResources.length || p.unmatchedProjects.length) ? `
+            <div class="ia-unmatched">
+              <b>⚠ Unmatched names — rows referencing these will be skipped</b>
+              ${p.unmatchedResources.length ? `<div>Resources not found: ${p.unmatchedResources.map(esc).join(", ")}</div>` : ""}
+              ${p.unmatchedProjects.length ? `<div>Projects not found: ${p.unmatchedProjects.map(esc).join(", ")}</div>` : ""}
+            </div>` : ""}
+          ${confirmError ? `<p class="txt-red ia-error">${esc(confirmError)}</p>` : ""}
+          <div class="btn-row modal-actions">
+            <button type="button" class="btn btn-primary" id="iaConfirm" ${isBusy ? "disabled" : ""}>${isBusy ? "Importing…" : "Confirm Import"}</button>
+            <button type="button" class="btn btn-ghost" id="iaCancelReview" ${isBusy ? "disabled" : ""}>Cancel</button>
+          </div>
+        </div>`;
+    }
+
+    function paintDone() {
+      return `
+        <div class="modal-box import-actuals-box" role="dialog" aria-modal="true">
+          <h3>Import complete</h3>
+          <div class="ia-summary-grid">
+            <div><b>${result.aggregatedRowsImported}</b> row${result.aggregatedRowsImported === 1 ? "" : "s"} imported <span class="muted">(${result.sourceRowsImported} source row${result.sourceRowsImported === 1 ? "" : "s"})</span></div>
+            <div><b>${result.aggregatedRowsSkipped}</b> row${result.aggregatedRowsSkipped === 1 ? "" : "s"} skipped — unmatched <span class="muted">(${result.sourceRowsSkipped} source row${result.sourceRowsSkipped === 1 ? "" : "s"})</span></div>
+            ${result.projectsUpdated.length ? `<div>${result.projectsUpdated.length} project billable flag${result.projectsUpdated.length === 1 ? "" : "s"} updated: ${result.projectsUpdated.map((u) => `${esc(u.projectName)} → ${u.billable ? "Billable" : "Non-billable"}`).join(", ")}</div>` : ""}
+          </div>
+          <div class="btn-row modal-actions">
+            <button type="button" class="btn btn-primary" id="iaDone">Done</button>
+          </div>
+        </div>`;
+    }
+
+    function paint() {
+      overlay.innerHTML = stage === "upload" ? paintUpload()
+        : stage === "parsing" ? paintParsing()
+        : stage === "review" ? paintReview()
+        : paintDone();
+      bind();
+    }
+
+    function bind() {
+      overlay.querySelectorAll("#iaCancel, #iaCancelReview").forEach((b) => b.addEventListener("click", close));
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+      const fileInput = overlay.querySelector("#iaFileInput");
+      if (fileInput) {
+        fileInput.addEventListener("change", () => {
+          const file = fileInput.files && fileInput.files[0];
+          if (!file) return;
+          if (!/\.xlsx$/i.test(file.name)) { uploadError = "Only .xlsx files are supported."; paint(); return; }
+          uploadAndPreview(file);
+        });
+      }
+      const dropZone = overlay.querySelector("#iaDropZone");
+      if (dropZone) {
+        ["dragover", "dragenter"].forEach((evt) => dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add("file-drop-active"); }));
+        ["dragleave", "dragend"].forEach((evt) => dropZone.addEventListener(evt, () => dropZone.classList.remove("file-drop-active")));
+        dropZone.addEventListener("drop", (e) => {
+          e.preventDefault();
+          dropZone.classList.remove("file-drop-active");
+          const file = e.dataTransfer.files && e.dataTransfer.files[0];
+          if (!file) return;
+          if (!/\.xlsx$/i.test(file.name)) { uploadError = "Only .xlsx files are supported."; paint(); return; }
+          uploadAndPreview(file);
+        });
+      }
+
+      const monthSelect = overlay.querySelector("#iaMonthSelect");
+      if (monthSelect) monthSelect.addEventListener("change", () => { monthChoice = monthSelect.value; });
+
+      overlay.querySelectorAll(".ia-billable-select").forEach((sel) => {
+        sel.addEventListener("change", () => {
+          billableOverrides[sel.dataset.projectId] = sel.value === "true";
+        });
+      });
+
+      const confirmBtn = overlay.querySelector("#iaConfirm");
+      if (confirmBtn) {
+        confirmBtn.addEventListener("click", async () => {
+          confirmError = "";
+          if (preview.requiresMonthSelection && monthChoice === "") {
+            confirmError = "Pick which month this import applies to before confirming.";
+            paint();
+            return;
+          }
+          isBusy = true;
+          paint();
+          try {
+            result = await apiPost("/actuals/confirm", {
+              importId: preview.importId,
+              month: preview.requiresMonthSelection ? Number(monthChoice) : undefined,
+              billableOverrides,
+            });
+            isBusy = false;
+            stage = "done";
+            paint();
+            await Promise.all([refreshActuals(), (async () => { STATE = await apiGet("/state"); })()]);
+            render();
+          } catch (err) {
+            isBusy = false;
+            confirmError = err.message;
+            paint();
+          }
+        });
+      }
+
+      const doneBtn = overlay.querySelector("#iaDone");
+      if (doneBtn) doneBtn.addEventListener("click", close);
+    }
+
+    paint();
+  }
+
   async function deleteResource(id) {
     const r = getResource(id);
     if (!r) return;
@@ -3270,6 +4596,7 @@
         STATE = await apiGet("/state");
         await reconcilePendingHolidayCaps();
         await refreshDataTabCaches();
+        await refreshActuals();
         render();
       } else {
         showLoginGate();

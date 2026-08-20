@@ -1,0 +1,441 @@
+diff --git a/public/app.js b/public/app.js
+index e24e667..a76599f 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -781,6 +781,30 @@
+     return okStart && okEnd;
+   }
+ 
++  // Which of the 12 FY month indices actually overlap a project's
++  // [start, end] window — any part of the month overlapping counts (same
++  // "any overlap" inclusion rule as projectInMonth above, which already
++  // drives the Dashboard/Project-Health "only flagged within the project's
++  // active date range" logic). Reused as-is by the Add-assignment modal
++  // (Item 2) so month-range scoping there always agrees with how the rest
++  // of the app already treats a project's date range, including the
++  // open-ended (`!project.end`) case falling through to "through end of FY".
++  function projectMonthRangeIndices(project) {
++    const out = [];
++    for (let i = 0; i < 12; i++) if (projectInMonth(project, i)) out.push(i);
++    return out;
++  }
++
++  // "Apr 2026"-style label for a project start/end date, for the
++  // Add-assignment modal's "Project period" readout — coarser than fmtDate
++  // (day-level) since what matters here is which FY months are in play.
++  function monthYearLabel(iso) {
++    if (!iso) return "";
++    const d = new Date(iso + "T00:00:00");
++    if (isNaN(d)) return iso;
++    return d.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
++  }
++
+   // ---------------------------------------------------------------------
+   // COMPUTE: Utilisation View  (Util% = Allocated% / Capacity% * 100)
+   // ---------------------------------------------------------------------
+@@ -831,8 +855,13 @@
+   // month) — a resource "planned" for a future phase still counts, since
+   // this is about staffing coverage, not current utilisation.
+   // ---------------------------------------------------------------------
+-  function projectRoleFillCounts(project) {
+-    const allocs = allocsForProject(project.id);
++  // extraAllocs (optional): additional { resourceId, months } rows to merge
++  // in for counting purposes only — never persisted. Lets the Add-assignment
++  // modal (Item 1) show role-fill counts that already reflect items queued
++  // in this modal session but not yet saved, so the user can see whether a
++  // role still needs another person before they've hit Save.
++  function projectRoleFillCounts(project, extraAllocs) {
++    const allocs = allocsForProject(project.id).concat(extraAllocs || []);
+     const roleEntries = Object.entries(project.roles || {}).filter(([, v]) => num(v, 0) > 0);
+     return roleEntries.map(([role, pct]) => {
+       const resIds = new Set(
+@@ -853,8 +882,8 @@
+   // vocabulary (already used for Project validation) rather than inventing
+   // a new one: green = fully covered, amber = partially covered, red = no
+   // one of that role assigned yet.
+-  function roleFillChipsHtml(project) {
+-    const rows = projectRoleFillCounts(project);
++  function roleFillChipsHtml(project, extraAllocs) {
++    const rows = projectRoleFillCounts(project, extraAllocs);
+     if (!rows.length) return '<span class="muted">No role requirements defined for this project.</span>';
+     return rows
+       .map((r) => {
+@@ -2733,9 +2762,14 @@
+   // (see the long comment on POST /api/allocations in
+   // server/routes/allocations.js). Then scroll to it and flash it, reusing
+   // the same highlight goToTab() already uses elsewhere in this app.
++  // allocId may be a single id or an array of ids (the queue-then-save-all
++  // Add-assignment modal, Item 1, can create several rows in one go and
++  // wants all of them revealed/flashed together, not just the last one).
+   function revealAllocationRow(allocId) {
+-    const a = STATE.allocations.find((x) => x.id === allocId);
+-    if (a) {
++    const ids = Array.isArray(allocId) ? allocId : [allocId];
++    ids.forEach((id) => {
++      const a = STATE.allocations.find((x) => x.id === id);
++      if (!a) return;
+       const fns = allocMatchFns();
+       const f = TABLE_FILTER[ALLOC_TABLE];
+       if (f) {
+@@ -2744,37 +2778,50 @@
+           if (v && fns[col] && !fns[col](a, v)) delete f[col];
+         });
+       }
+-    }
++    });
+     render();
+     requestAnimationFrame(() => {
+-      const el = document.querySelector(`[data-row-id="alloc-${allocId}"]`);
+-      if (!el) return;
+-      el.scrollIntoView({ behavior: "smooth", block: "center" });
+-      el.classList.add("flash");
+-      setTimeout(() => el.classList.remove("flash"), 2200);
++      ids.forEach((id, i) => {
++        const el = document.querySelector(`[data-row-id="alloc-${id}"]`);
++        if (!el) return;
++        if (i === 0) el.scrollIntoView({ behavior: "smooth", block: "center" });
++        el.classList.add("flash");
++        setTimeout(() => el.classList.remove("flash"), 2200);
++      });
+     });
+   }
+ 
+   // ---------------------------------------------------------------------
+-  // "Add assignment" — Allocations tab (Item 2 + fix for Item 1).
++  // "Add assignment" — Allocations tab (Item 2/3 from an earlier round,
++  // plus the fix for the original silent-add bug). Extended this round for
++  // two requests from the real user:
+   //
+-  // Replaces the old one-click "+ Add allocation" (which silently inserted
+-  // a blank row for whichever resource/project happened to sort first
+-  // alphabetically, then relied on the user noticing and editing it
+-  // in-place — see the POST /api/allocations comment for how that produced
+-  // the "adding a new row doesn't do anything" bug when a filter was
+-  // active). This modal instead collects an explicit Project + Resource +
+-  // allocation % from the user before creating anything.
++  //   1. Queue-then-save-all: rather than one Project+Resource+% ->
++  //      immediate POST -> close, the modal now lets the user pick a
++  //      Resource+% for each required role in turn, "Add to list" each one
++  //      into a visible, removable queue (Project stays fixed for the
++  //      session), then "Save N assignments" fires the POSTs sequentially
++  //      and closes. A single item still only takes "Add to list" then
++  //      "Save" — no extra steps forced beyond that.
++  //   2. Date-scoped months: once a Project is picked its start/end dates
++  //      are shown ("Project period: Apr 2026 – Sep 2026"), and the % is
++  //      only written into the FY months that overlap that window
++  //      (projectMonthRangeIndices/projectInMonth — the same overlap logic
++  //      the Dashboard/Project-Health date-range flagging already uses),
++  //      not blindly into all 12 months. Open-ended projects (no end date)
++  //      fall through projectInMonth's own `!project.end` case, i.e. from
++  //      the start month through the end of the FY — consistent with how
++  //      the rest of the app already treats an open-ended project.
+   //
+-  // Deliberately manual throughout, per the explicit request ("do not
+-  // default assign since resource may be assigned to different projects"):
+-  // the Resource field always starts unselected and the Add button stays
+-  // disabled until a human has chosen both a project and a resource.
+-  // Role-matching only ever *surfaces* candidates (grouping resources whose
+-  // Resources-tab `role` matches one of the project's required roles into
+-  // their own <optgroup>, sorted to the top) — it never pre-selects,
+-  // filters out, or auto-submits anything; any resource in the full list
+-  // remains one click away.
++  // Deliberately manual throughout, per the original explicit request ("do
++  // not default assign since resource may be assigned to different
++  // projects"): the Resource field always starts unselected and "Add to
++  // list" stays disabled until a human has chosen both a project and a
++  // resource. Role-matching only ever *surfaces* candidates (grouping
++  // resources whose Resources-tab `role` matches one of the project's
++  // required roles into their own <optgroup>, sorted to the top) — it
++  // never pre-selects, filters out, or auto-submits anything; any resource
++  // in the full list remains one click away.
+   // ---------------------------------------------------------------------
+   function openAddAssignmentModal() {
+     if (!STATE.resources.length || !STATE.projects.length) {
+@@ -2790,30 +2837,45 @@
+     // field is never pre-filled this way.
+     let selectedProjectId = getFilter(ALLOC_TABLE, "projectId") || "";
+ 
++    // Pending queue for this modal session: [{ tmpId, resourceId,
++    // resourceName, role, pct }]. Nothing here is persisted until "Save
++    // N assignments" is clicked — each entry is just enough to (a) render
++    // a removable line item, (b) feed projectRoleFillCounts/roleFillChipsHtml
++    // as "extra" allocations so the live fill counts already reflect it,
++    // and (c) drive the actual POST /api/allocations calls at save time.
++    let pendingQueue = [];
++    let isSaving = false;
++
+     const overlay = document.createElement("div");
+     overlay.className = "modal-overlay";
+     overlay.innerHTML = `
+       <div class="modal-box add-assignment-box" role="dialog" aria-modal="true">
+         <h3>Add assignment</h3>
+-        <p class="muted">Pick a project and a resource, then set an allocation % — nothing is chosen for you.</p>
++        <p class="muted">Pick a project, then add one resource at a time to the list below — save them all together when you're done.</p>
+         <label class="modal-label">Project
+           <select id="aaProject" class="cell-input">
+             <option value="">Select a project…</option>
+             ${projectsSorted.map((p) => `<option value="${p.id}" ${p.id === selectedProjectId ? "selected" : ""}>${esc(p.name)} — ${esc(p.status)}</option>`).join("")}
+           </select>
+         </label>
++        <p class="muted alloc-hint" id="aaProjectLockNote"></p>
++        <div class="modal-suggest" id="aaPeriod"></div>
+         <div class="modal-suggest" id="aaRoles"></div>
++        <div id="aaQueueBox"></div>
+         <label class="modal-label">Resource
+           <select id="aaResource" class="cell-input">
+             <option value="">Select a resource…</option>
+           </select>
+         </label>
+         <p class="muted alloc-hint" id="aaResourceHint"></p>
+-        <label class="modal-label">Allocation % <span class="muted">— applied to every month; fine-tune individual months after adding</span>
++        <label class="modal-label">Allocation % <span class="muted">— applied only to this project's in-range months (see period above); fine-tune individual months after saving</span>
+           <input type="number" min="0" max="100" step="5" id="aaPct" class="cell-input" value="50">
+         </label>
+         <div class="btn-row modal-actions">
+-          <button type="button" class="btn btn-primary" id="aaAdd" disabled>+ Add assignment</button>
++          <button type="button" class="btn btn-secondary" id="aaAddToList" disabled>+ Add to list</button>
++        </div>
++        <div class="btn-row modal-actions">
++          <button type="button" class="btn btn-primary" id="aaSaveAll" disabled>Save assignments</button>
+           <button type="button" class="btn btn-ghost" id="aaCancel">Cancel</button>
+         </div>
+       </div>`;
+@@ -2821,21 +2883,79 @@
+ 
+     const projectSel = overlay.querySelector("#aaProject");
+     const resourceSel = overlay.querySelector("#aaResource");
++    const lockNote = overlay.querySelector("#aaProjectLockNote");
++    const periodBox = overlay.querySelector("#aaPeriod");
+     const rolesBox = overlay.querySelector("#aaRoles");
++    const queueBox = overlay.querySelector("#aaQueueBox");
+     const hintBox = overlay.querySelector("#aaResourceHint");
+-    const addBtn = overlay.querySelector("#aaAdd");
++    const pctInput = overlay.querySelector("#aaPct");
++    const addToListBtn = overlay.querySelector("#aaAddToList");
++    const saveAllBtn = overlay.querySelector("#aaSaveAll");
++    const cancelBtn = overlay.querySelector("#aaCancel");
++
++    // Pending queue items, reshaped as { resourceId, months } rows so they
++    // can be merged into projectRoleFillCounts/roleFillChipsHtml exactly
++    // like real allocations — see that function's extraAllocs param.
++    function pendingAsAllocs() {
++      return pendingQueue.map((item) => ({ resourceId: item.resourceId, months: new Array(12).fill(item.pct) }));
++    }
++
++    // Project selection is locked once anything has been queued — every
++    // queued item belongs to one project, so switching projects mid-queue
++    // would silently orphan them. Remove the queued items (below) to
++    // unlock it again.
++    function paintProjectLock() {
++      projectSel.disabled = pendingQueue.length > 0;
++      lockNote.textContent = pendingQueue.length > 0
++        ? "Project is locked while assignments are queued below — remove them all to pick a different project."
++        : "";
++    }
++
++    function paintPeriod() {
++      const p = getProject(projectSel.value);
++      if (!p) { periodBox.innerHTML = ""; return; }
++      const startLabel = p.start ? monthYearLabel(p.start) : "start of FY";
++      const endLabel = p.end ? monthYearLabel(p.end) : "ongoing (through end of FY)";
++      const n = projectMonthRangeIndices(p).length;
++      periodBox.innerHTML = `<div><b>Project period:</b> ${esc(startLabel)} – ${esc(endLabel)} `
++        + `<span class="muted">(${n} of 12 FY month${n === 1 ? "" : "s"} — the allocation % below is only applied to these)</span></div>`;
++    }
+ 
+-    // Item 3, second placement: the same role-fill counts shown above the
+-    // Allocations table also appear here, live, as context while picking
+-    // who to add — arguably the more useful of the two spots, since it's
+-    // exactly the moment the number matters.
++    // Item 3 (earlier round), extended: role-fill counts here include not
++    // just what's already saved server-side but also whatever's currently
++    // queued in this modal session (pendingAsAllocs), so the count updates
++    // live as the user adds/removes queue items — before they've hit Save.
+     function paintRoles() {
+       const p = getProject(projectSel.value);
+       rolesBox.innerHTML = p
+-        ? `<div><b>${esc(p.name)} — resources planned per role</b></div><div class="role-fill-row">${roleFillChipsHtml(p)}</div>`
++        ? `<div><b>${esc(p.name)} — resources planned per role</b></div><div class="role-fill-row">${roleFillChipsHtml(p, pendingAsAllocs())}</div>`
+         : "";
+     }
+ 
++    function paintQueue() {
++      if (!pendingQueue.length) {
++        queueBox.innerHTML = `<p class="muted aa-queue-empty">No assignments added yet — pick a resource and % below, then "Add to list".</p>`;
++      } else {
++        queueBox.innerHTML = `
++          <div class="aa-queue-list">
++            ${pendingQueue.map((item) => `
++              <div class="aa-queue-item" data-tmp-id="${esc(item.tmpId)}">
++                <span>${esc(item.role || "No role")} — <b>${esc(item.resourceName)}</b> — ${esc(item.pct)}%</span>
++                <button type="button" class="btn btn-ghost btn-xs aa-queue-remove" data-tmp-id="${esc(item.tmpId)}" title="Remove from list" aria-label="Remove ${esc(item.resourceName)} from list">✕</button>
++              </div>`).join("")}
++          </div>`;
++      }
++      queueBox.querySelectorAll(".aa-queue-remove").forEach((btn) => {
++        btn.addEventListener("click", () => {
++          pendingQueue = pendingQueue.filter((it) => it.tmpId !== btn.dataset.tmpId);
++          paintQueue();
++          paintRoles();
++          paintProjectLock();
++          updateButtons();
++        });
++      });
++    }
++
+     // Groups resources into "matches one of this project's required
+     // roles" (sorted to the top, via its own <optgroup>) vs. everyone
+     // else — a plain, native <select> is enough for this; nothing here
+@@ -2863,44 +2983,109 @@
+         : `${r.name} is a ${r.role}${p ? " — not one of this project's listed required roles, but you can still assign them." : "."}`;
+     }
+ 
+-    function updateAddEnabled() { addBtn.disabled = !(projectSel.value && resourceSel.value); }
++    function updateButtons() {
++      addToListBtn.disabled = isSaving || !(projectSel.value && resourceSel.value);
++      saveAllBtn.disabled = isSaving || pendingQueue.length === 0;
++      saveAllBtn.textContent = pendingQueue.length
++        ? `Save ${pendingQueue.length} assignment${pendingQueue.length === 1 ? "" : "s"}`
++        : "Save assignments";
++    }
++
++    function resetPickerFields() {
++      // Resource/%/hint reset after each queue add so the next role can be
++      // picked immediately — Project (and the queue itself) is untouched.
++      resourceSel.value = "";
++      pctInput.value = "50";
++      updateHint();
++    }
+ 
+     projectSel.addEventListener("change", () => {
++      paintPeriod();
+       paintRoles();
+       paintResourceOptions();
+       updateHint();
+-      updateAddEnabled();
++      updateButtons();
+     });
+     resourceSel.addEventListener("change", () => {
+       updateHint();
+-      updateAddEnabled();
++      updateButtons();
+     });
+ 
++    paintProjectLock();
++    paintPeriod();
+     paintRoles();
+     paintResourceOptions();
++    paintQueue();
+     updateHint();
+-    updateAddEnabled();
++    updateButtons();
+ 
+-    function close() { overlay.remove(); }
+-    overlay.querySelector("#aaCancel").addEventListener("click", close);
++    function close() { if (!isSaving) overlay.remove(); }
++    cancelBtn.addEventListener("click", close);
+     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+ 
+-    addBtn.addEventListener("click", async () => {
+-      const projectId = projectSel.value;
+-      const resourceId = resourceSel.value;
+-      if (!projectId || !resourceId) return; // belt-and-braces — button is disabled until both are set
+-      const pct = clampPct(overlay.querySelector("#aaPct").value);
+-      addBtn.disabled = true;
+-      try {
+-        const months = new Array(12).fill(pct);
+-        const a = await apiPost("/allocations", { resourceId, projectId, months });
+-        STATE.allocations.push(a);
++    addToListBtn.addEventListener("click", () => {
++      const p = getProject(projectSel.value);
++      const r = getResource(resourceSel.value);
++      if (!p || !r) return; // belt-and-braces — button is disabled until both are set
++      const pct = clampPct(pctInput.value);
++      if (!(pct > 0)) { alert("Set an allocation % above 0 before adding to the list."); return; }
++      pendingQueue.push({ tmpId: uid("pend"), resourceId: r.id, resourceName: r.name, role: r.role, pct });
++      paintQueue();
++      paintRoles();
++      paintProjectLock();
++      resetPickerFields();
++      updateButtons();
++    });
++
++    saveAllBtn.addEventListener("click", async () => {
++      const project = getProject(projectSel.value);
++      if (!project || !pendingQueue.length || isSaving) return;
++      isSaving = true;
++      addToListBtn.disabled = true;
++      saveAllBtn.disabled = true;
++      saveAllBtn.textContent = "Saving…";
++      cancelBtn.disabled = true;
++
++      const savedIds = [];
++      const failures = []; // { item, message }
++      // Sequential on purpose — this app has no batch-insert endpoint and
++      // adding one isn't worth the backend complexity (per spec). Iterating
++      // a fresh copy and splicing pendingQueue as each item succeeds means
++      // a retry after a partial failure only ever resends what's still in
++      // the (now-shorter) queue, never something already saved.
++      for (const item of pendingQueue.slice()) {
++        const months = new Array(12).fill(0);
++        projectMonthRangeIndices(project).forEach((i) => { months[i] = item.pct; });
++        try {
++          const a = await apiPost("/allocations", { resourceId: item.resourceId, projectId: project.id, months });
++          STATE.allocations.push(a);
++          savedIds.push(a.id);
++          pendingQueue = pendingQueue.filter((it) => it.tmpId !== item.tmpId);
++        } catch (err) {
++          failures.push({ item, message: err.message });
++        }
++      }
++
++      isSaving = false;
++      if (savedIds.length) await refreshDataTabCaches();
++
++      if (failures.length) {
++        alert(
++          `${savedIds.length} assignment${savedIds.length === 1 ? "" : "s"} saved successfully.\n`
++          + `${failures.length} failed and ${failures.length === 1 ? "is" : "are"} still in the list below — fix the issue and click "Save" again to retry ${failures.length === 1 ? "it" : "just those"} (already-saved ones won't be resubmitted):\n`
++          + failures.map((f) => `• ${f.item.resourceName} (${f.item.role || "No role"}) — ${f.message}`).join("\n")
++        );
++        // Modal stays open with only the still-unsaved items left queued.
++        paintQueue();
++        paintRoles();
++        paintProjectLock();
++        cancelBtn.disabled = false;
++        updateButtons();
++        if (savedIds.length) revealAllocationRow(savedIds);
++      } else {
+         close();
+         await refreshDataTabCaches();
+-        revealAllocationRow(a.id);
+-      } catch (err) {
+-        alert("Couldn't add this assignment: " + err.message);
+-        addBtn.disabled = false;
++        revealAllocationRow(savedIds);
+       }
+     });
+   }
+diff --git a/public/style.css b/public/style.css
+index 7ea3e02..28ae44d 100644
+--- a/public/style.css
++++ b/public/style.css
+@@ -408,6 +408,18 @@ textarea.notes-input::placeholder { color: var(--muted); opacity: 0.65; font-sty
+ .role-fill-chip { display: inline-block; margin: 2px 10px 2px 0; font-size: 12px; }
+ .role-fill-chip b { font-variant-numeric: tabular-nums; }
+ 
++/* Add-assignment modal's pending queue (Item 1) — one removable line item
++   per resource added before "Save assignments" is clicked. */
++.aa-queue-empty { margin: 10px 0; font-size: 12.5px; }
++.aa-queue-list { margin: 10px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
++.aa-queue-item {
++  display: flex; align-items: center; justify-content: space-between; gap: 8px;
++  padding: 7px 10px; font-size: 12.5px; border-bottom: 1px solid var(--border);
++}
++.aa-queue-item:last-child { border-bottom: none; }
++.aa-queue-item:nth-child(even) { background: var(--bg); }
++.aa-queue-remove { padding: 2px 8px; line-height: 1; }
++
+ /* Header — logged-in user chip */
+ .user-chip {
+   font-family: var(--font-sub); font-size: 12px; font-weight: 600; color: var(--navy);

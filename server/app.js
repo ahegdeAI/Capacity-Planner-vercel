@@ -18,6 +18,7 @@ const versionRoutes = require("./routes/versions");
 const auditLogRoutes = require("./routes/auditlog");
 const userRoutes = require("./routes/users");
 const exportRoutes = require("./routes/exportRoutes");
+const actualsRoutes = require("./routes/actuals");
 
 const app = express();
 const isProd = process.env.NODE_ENV === "production";
@@ -88,6 +89,7 @@ app.use("/api/versions", versionRoutes);
 app.use("/api/audit", auditLogRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/export", exportRoutes);
+app.use("/api/actuals", actualsRoutes);
 
 app.use(express.static(path.join(__dirname, "..", "public")));
 // Fallback for client-side routes (e.g. /reset-password.html is a real

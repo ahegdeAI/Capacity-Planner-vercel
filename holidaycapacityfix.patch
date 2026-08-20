@@ -1,0 +1,287 @@
+diff --git a/public/app.js b/public/app.js
+index c9c78c1..aaf02c4 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -698,6 +698,77 @@
+     return Number.isFinite(v) ? v : 100;
+   }
+ 
++  // ---------------------------------------------------------------------
++  // COMPUTE: max allocatable hours for a resource in a given month —
++  // capacity % of that month's total working hours (Mon–Fri). This is the
++  // single formula every hours-based figure in the app derives from:
++  //   maxAllocatableHours = capacityPercent / 100 × workingHours
++  // Since capacityPercent already reflects any logged-holiday reduction
++  // (see suggestedCapForNote below) once applied, this stays correct
++  // end-to-end without needing to know about holidays itself.
++  // ---------------------------------------------------------------------
++  function maxAllocatableHours(resource, mIdx) {
++    const cap = resourceCap(resource, mIdx);
++    const hours = (STATE.months[mIdx] && STATE.months[mIdx].hours) || 0;
++    return round((cap / 100) * hours, 1);
++  }
++  function allocatedPctForResourceMonth(resourceId, mIdx) {
++    return allocsForResource(resourceId).reduce((s, a) => s + num(a.months[mIdx], 0), 0);
++  }
++  function allocatedHoursForResourceMonth(resourceId, mIdx) {
++    const hours = (STATE.months[mIdx] && STATE.months[mIdx].hours) || 0;
++    return round((allocatedPctForResourceMonth(resourceId, mIdx) / 100) * hours, 1);
++  }
++  // Same over/healthy/under classification computeUtilisation uses, exposed
++  // standalone so any other view (e.g. Allocations) can show the identical
++  // over-allocation verdict for a resource+month without recomputing the
++  // whole utilisation table.
++  function resourceMonthStatus(resource, mIdx) {
++    const cap = resourceCap(resource, mIdx);
++    if (!(cap > 0)) return null;
++    const util = round((allocatedPctForResourceMonth(resource.id, mIdx) / cap) * 100, 1);
++    return util > 100 ? "over" : util >= 70 ? "healthy" : "under";
++  }
++
++  // ---------------------------------------------------------------------
++  // COMPUTE: suggested capacity % for a logged planned/public holiday note.
++  //   suggested% = baseCapacity% × (workingDays - loggedDays) / workingDays
++  // Reduces the resource's *pre-holiday* capacity % (so a part-time
++  // person's existing reduced % is further reduced by holidays, not
++  // overwritten to assume a 100% base) — shared by the Resources-tab cell
++  // affordance and the "log holiday" modal so both always agree on the
++  // same number.
++  //
++  // "Pre-holiday" base is captured once, into the note itself
++  // (note.baseCapacity — an additive optional field on the existing
++  // capNotes JSON blob, not a schema change), at the moment the note is
++  // first saved. Deliberately NOT recomputed from the resource's *current*
++  // live capacity % on every render: once a suggestion has been applied,
++  // the live capacity already reflects the reduction, and re-deriving from
++  // it would compound (100% → 91% → 83% → 75% → … on every re-render)
++  // instead of settling once the suggestion is applied. Notes saved before
++  // this fix have no baseCapacity, so they fall back to the live capacity
++  // at read time — the same (slightly imperfect, but non-compounding for a
++  // single apply) behaviour as before.
++  // ---------------------------------------------------------------------
++  function suggestedCapForHoliday(baseCapPct, workingDays, loggedDays) {
++    const wd = num(workingDays, 0);
++    const days = num(loggedDays, 0);
++    if (!(wd > 0) || !(days > 0)) return null;
++    const frac = Math.max(0, (wd - days) / wd);
++    return clampPct(round(num(baseCapPct, 100) * frac, 0));
++  }
++  function baseCapForNote(resource, mIdx, note) {
++    const n = note !== undefined ? note : (resource.capNotes && resource.capNotes[mIdx]);
++    return n && Number.isFinite(n.baseCapacity) ? n.baseCapacity : resourceCap(resource, mIdx);
++  }
++  function suggestedCapForNote(resource, mIdx) {
++    const note = resource.capNotes && resource.capNotes[mIdx];
++    if (!note || !note.days) return null;
++    const workingDays = STATE.months[mIdx] && STATE.months[mIdx].days;
++    return suggestedCapForHoliday(baseCapForNote(resource, mIdx, note), workingDays, note.days);
++  }
++
+   function projectInMonth(project, mIdx) {
+     const [first, last] = MONTH_BOUNDS[mIdx];
+     const okStart = !project.start || project.start <= last;
+@@ -710,13 +781,11 @@
+   // ---------------------------------------------------------------------
+   function computeUtilisation() {
+     return STATE.resources.map((r) => {
+-      const allocs = allocsForResource(r.id);
+       const monthly = MONTH_BOUNDS.map((_, mIdx) => {
+-        const allocated = allocs.reduce((s, a) => s + num(a.months[mIdx], 0), 0);
++        const allocated = allocatedPctForResourceMonth(r.id, mIdx);
+         const cap = resourceCap(r, mIdx);
+         const util = cap > 0 ? round((allocated / cap) * 100, 1) : null;
+-        let status = null;
+-        if (util != null) status = util > 100 ? "over" : util >= 70 ? "healthy" : "under";
++        const status = util != null ? (util > 100 ? "over" : util >= 70 ? "healthy" : "under") : null;
+         return { allocated, cap, util, status };
+       });
+       const valid = monthly.filter((m) => m.util != null);
+@@ -1055,12 +1124,20 @@
+       const u = util.find((x) => x.resource.id === r.id);
+       const capCells = r.cap.map((c, i) => {
+         const note = r.capNotes && r.capNotes[i];
++        const capValue = num(c, 100);
++        // Suggested capacity % from the logged holiday, only surfaced as a
++        // one-click chip while it would actually change something — once
++        // applied (or if there's no note/days), it disappears again.
++        const suggested = suggestedCapForNote(r, i);
++        const showSuggestChip = suggested != null && suggested !== capValue;
+         return `<td class="${i === cur ? "cur-month" : ""} ${note ? "has-note" : ""}">
+           <div class="cap-cell">
+-            <input type="number" min="0" max="100" step="5" value="${num(c, 100)}"
++            <input type="number" min="0" max="100" step="5" value="${capValue}"
+               data-entity="resource" data-id="${r.id}" data-field="cap" data-idx="${i}" class="cell-input">
+             <button type="button" class="note-btn ${note ? "has-note" : ""}" data-action="open-holiday" data-id="${r.id}" data-idx="${i}"
+               title="${note ? esc(noteTooltip(note)) : "Log planned or public holiday"}">●</button>
++            ${showSuggestChip ? `<button type="button" class="suggest-chip" data-action="apply-suggested-cap" data-id="${r.id}" data-idx="${i}" data-value="${suggested}"
++              title="${esc(note.days)} day(s) off out of ${esc(STATE.months[i].days)} working days in ${esc(STATE.months[i].label)} — suggested capacity ${suggested}% (current ${capValue}% × available days). Click to apply.">→ ${suggested}%</button>` : ""}
+           </div>
+         </td>`;
+       }).join("");
+@@ -1296,10 +1373,27 @@
+       const res = getResource(a.resourceId);
+       const proj = getProject(a.projectId);
+       const avg = round(a.months.reduce((s, v) => s + num(v, 0), 0) / 12, 0);
+-      const monthCells = a.months.map((v, i) => `<td class="${allocCellClass(v)} ${i === cur ? "cur-month" : ""}">
++      // Cell colour + "remaining hrs" readout reflect this resource's total
++      // allocation across *every* project that month vs. their capacity
++      // (maxAllocatableHours = capacity% ÷ 100 × that month's working
++      // hours) — the same status computeUtilisation/the Dashboard use, so
++      // a resource whose capacity was reduced by a logged holiday shows the
++      // same over-allocation warning here, not just on the Utilisation tab.
++      const monthCells = a.months.map((v, i) => {
++        const status = res ? resourceMonthStatus(res, i) : null;
++        const cellCls = status ? utilCellClass(status) : allocCellClass(v);
++        const remainingSub = res
++          ? (() => {
++              const remaining = round(maxAllocatableHours(res, i) - allocatedHoursForResourceMonth(res.id, i), 1);
++              return `<div class="score-sub">${remaining < 0 ? `over by ${Math.abs(remaining)}h` : `${remaining}h left`}</div>`;
++            })()
++          : "";
++        return `<td class="${cellCls} ${i === cur ? "cur-month" : ""}">
+           <input type="number" min="0" max="100" step="5" value="${v || ""}" placeholder="0"
+             data-entity="allocation" data-id="${a.id}" data-field="month" data-idx="${i}" class="cell-input alloc-input">
+-        </td>`).join("");
++          ${remainingSub}
++        </td>`;
++      }).join("");
+       return `
+         <tr data-row-id="alloc-${a.id}">
+           <td class="sticky-col name-cell">
+@@ -1334,7 +1428,7 @@
+           <h2>Allocations — capacity planner (% per resource × project × month)</h2>
+           <button class="btn btn-primary" data-action="add-allocation">+ Add allocation</button>
+         </div>
+-        <p class="muted">Enter allocation % (0–100) per month. Role fills in automatically from the Resources register, so it can never drift out of sync.</p>
++        <p class="muted">Enter allocation % (0–100) per month. Role fills in automatically from the Resources register, so it can never drift out of sync. Each cell's small subtext is that resource's remaining hours that month (capacity % × working hours, across every project they're on) — cell colour matches the same over/healthy/under-allocated verdict as the Utilisation tab, so a capacity % reduced for a logged holiday shows up here too. &nbsp; <span class="legend-dot cell-red"></span> over-allocated &nbsp; <span class="legend-dot cell-green"></span> healthy &nbsp; <span class="legend-dot cell-blue"></span> under-utilised.</p>
+         <div class="table-toolbar">
+           <span class="muted">Click a column header to sort. Use the boxes under the headers to filter.</span>
+           <div class="table-toolbar-actions">
+@@ -1936,6 +2030,12 @@
+       btn.addEventListener("click", () => openHolidayModal(btn.dataset.id, parseInt(btn.dataset.idx, 10)));
+     });
+ 
++    // Resources — one-click "apply suggested capacity %" chip shown right
++    // on the cell for any month with a logged holiday (see suggestedCapForNote).
++    view.querySelectorAll('[data-action="apply-suggested-cap"]').forEach((btn) => {
++      btn.addEventListener("click", () => applySuggestedCap(btn.dataset.id, parseInt(btn.dataset.idx, 10), num(btn.dataset.value, 100)));
++    });
++
+     // Inline cell edits. Only SELECT/date fire one "change" per commit, so
+     // those re-render (and audit-log) immediately. Everything typed
+     // character-by-character (text/number/textarea) mutates STATE quietly
+@@ -1999,6 +2099,25 @@
+     view.querySelectorAll('[data-action="remove-user"]').forEach((b) => b.addEventListener("click", () => removeUser(b.dataset.id)));
+   }
+ 
++  // Applies a suggested capacity % to a resource's month cell — shared by
++  // the one-click chip on the Resources table cell and the "Use this"
++  // button inside the holiday modal, so both go through the exact same
++  // PATCH /api/resources/:id call (field: "cap") the manual capacity-cell
++  // edit uses. That means it's audit-logged identically to a manual edit
++  // (see server/routes/resources.js), and every downstream calculation
++  // (Utilisation, Dashboard, Allocations) picks it up immediately since
++  // they all read the resource's cap[] array live.
++  async function applySuggestedCap(resourceId, idx, value) {
++    try {
++      const updated = await apiPatch(`/resources/${resourceId}`, { field: "cap", idx, value: clampPct(value) });
++      Object.assign(getResource(resourceId), updated);
++      await refreshDataTabCaches();
++    } catch (err) {
++      alert("Couldn't apply suggested capacity: " + err.message);
++      throw err;
++    }
++  }
++
+   // ---------------------------------------------------------------------
+   // Planned / public holiday capture — a small modal anchored to a single
+   // capacity cell, so leave can be logged without adding a new column.
+@@ -2010,6 +2129,11 @@
+     const existing = r.capNotes[idx];
+     const workingDays = STATE.months[idx].days;
+     const monthLabel = STATE.months[idx].label;
++    // Captured once when the modal opens (see suggestedCapForNote's
++    // comment for why): the "pre-holiday" capacity % to compute
++    // suggestions off, so re-opening this modal or tweaking the day count
++    // never compounds a previously-applied suggestion.
++    const baseCapacity = baseCapForNote(r, idx, existing);
+ 
+     const overlay = document.createElement("div");
+     overlay.className = "modal-overlay";
+@@ -2043,17 +2167,22 @@
+     function updateSuggestion() {
+       const days = num(overlay.querySelector("#hnDays").value, 0);
+       const suggestEl = overlay.querySelector("#hnSuggest");
+-      if (days > 0) {
+-        const suggested = Math.max(0, round(100 * (1 - days / Math.max(1, workingDays)), 0));
+-        suggestEl.innerHTML = `Suggested capacity for ${esc(monthLabel)} based on days off: <b>${suggested}%</b> <button type="button" class="btn btn-secondary btn-xs" id="hnApply">Use this</button>`;
++      // Reduces this resource's pre-holiday capacity % (not a flat 100%
++      // base, and not the live capacity % which may already reflect a
++      // previously-applied suggestion) by the fraction of working days
++      // logged as leave — same formula, and the same shared helper, as the
++      // one-click chip on the Resources table cell (see suggestedCapForNote
++      // / suggestedCapForHoliday), so a part-time person's existing reduced
++      // % is further reduced by holidays rather than being overwritten.
++      const suggested = suggestedCapForHoliday(baseCapacity, workingDays, days);
++      if (suggested != null) {
++        suggestEl.innerHTML = `Suggested capacity for ${esc(monthLabel)} — ${esc(r.name)}'s ${baseCapacity}% capacity × ${workingDays - days}/${workingDays} available working days: <b>${suggested}%</b> <button type="button" class="btn btn-secondary btn-xs" id="hnApply">Use this</button>`;
+         overlay.querySelector("#hnApply").addEventListener("click", async () => {
+           try {
+-            const updated = await apiPatch(`/resources/${r.id}`, { field: "cap", idx, value: clampPct(suggested) });
+-            Object.assign(getResource(r.id), updated);
++            await applySuggestedCap(r.id, idx, suggested);
+             suggestEl.innerHTML += ' <span class="txt-green">✓ applied</span>';
+-            await refreshDataTabCaches();
+           } catch (err) {
+-            alert("Couldn't apply suggested capacity: " + err.message);
++            // applySuggestedCap already alerted; nothing further to do here.
+           }
+         });
+       } else {
+@@ -2080,7 +2209,10 @@
+       const type = overlay.querySelector("#hnType").value;
+       const days = overlay.querySelector("#hnDays").value;
+       const note = overlay.querySelector("#hnNote").value.trim();
+-      const next = (!days && !note) ? null : { type, days: days ? num(days, 0) : null, note };
++      // Freeze the pre-holiday base capacity into the note itself (only
++      // meaningful once days off are logged) so the suggested % this note
++      // implies stays stable — see the big comment on suggestedCapForHoliday.
++      const next = (!days && !note) ? null : { type, days: days ? num(days, 0) : null, note, baseCapacity: days ? baseCapacity : null };
+       try {
+         const updated = await apiPatch(`/resources/${r.id}`, { field: "capNote", idx, note: next });
+         Object.assign(getResource(r.id), updated);
+diff --git a/public/style.css b/public/style.css
+index de2a0a0..03e1032 100644
+--- a/public/style.css
++++ b/public/style.css
+@@ -262,9 +262,29 @@ table.grid-table td:has(.cap-cell), table.grid-table th.sortable:has(.th-sub) {
+ }
+ .note-btn:hover { opacity: 1; background: var(--bg); }
+ .note-btn.has-note { opacity: 1; color: var(--amber); background: var(--amber-bg); }
+-td.has-note { box-shadow: inset 0 0 0 2px var(--amber); }
++/* Logged-holiday month cell — a real amber fill (matching the same
++   --amber-bg fill used everywhere else in the app for "highlighted in
++   amber": .cell-amber, .st-hold, .pr-medium, .badge-r, .sev-review, …)
++   rather than an inset box-shadow border alone. A box-shadow-only outline
++   on a <td> inside a `border-collapse: collapse` table gets painted under
++   the neighbouring cells' collapsed borders in most browsers, so it read
++   as "basically invisible" even though the class was applied correctly —
++   this is the fix for that. The border is kept as a secondary accent now
++   that the fill makes the cell unmistakably highlighted. */
++td.has-note { background: var(--amber-bg) !important; box-shadow: inset 0 0 0 2px var(--amber); position: relative; z-index: 1; }
+ .legend-dot.note-dot { background: var(--amber); border-radius: 50%; }
+ 
++/* Resources — one-click "apply suggested capacity %" chip, shown on a
++   month cell once a holiday note with days-off is logged and the
++   suggested capacity differs from what's currently set. Sits under the
++   number input inside the same relatively-positioned .cap-cell. */
++.suggest-chip {
++  display: block; width: 100%; margin-top: 2px; border: none; border-radius: 4px;
++  background: var(--amber); color: #fff; font-size: 10px; font-weight: 700;
++  padding: 2px 4px; cursor: pointer; line-height: 1.3;
++}
++.suggest-chip:hover { filter: brightness(0.9); }
++
+ /* Projects — status filter chips */
+ .filter-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+ .chip-filter {
