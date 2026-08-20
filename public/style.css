@@ -107,16 +107,26 @@ main#view {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 14px 16px; box-shadow: var(--shadow); border-top: 3px solid var(--accent);
   font-family: inherit; text-align: left; width: 100%; margin: 0;
+  display: flex; flex-direction: column; justify-content: flex-start;
 }
 .kpi-card.clickable { cursor: pointer; transition: transform 0.12s, box-shadow 0.12s; }
 .kpi-card.clickable:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(38, 71, 107, 0.14); }
-.kpi-label { font-family: var(--font-sub); font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-.kpi-value { font-size: 27px; font-weight: 700; margin-top: 4px; color: var(--navy-deep); }
-.kpi-sub { font-size: 11px; margin-top: 2px; }
-/* Dashboard hero row — headline KPIs, exec-skim first. Over-allocated gets
-   an amber top border instead of the default green, so the one metric that
-   usually signals a problem reads as "attention" at a glance, same
-   semantics as .cell-amber/.sev-review elsewhere. */
+.kpi-label { font-family: var(--font-sub); font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; line-height: 1.3; }
+.kpi-value { font-family: inherit; font-size: 27px; font-weight: 700; margin-top: 4px; color: var(--navy-deep); line-height: 1.2; }
+.kpi-sub { font-family: var(--font-sub); font-size: 11px; margin-top: auto; padding-top: 4px; }
+/* Dashboard hero rows (Item B/E redesign) — two fixed 6-up rows instead of
+   an auto-fit wrap, so the grid never breaks unevenly (e.g. 8-then-2) as
+   tiles are added/removed. flex-direction:column + margin-top:auto on
+   .kpi-sub above keeps every card's baseline aligned even when one card's
+   label wraps to two lines and a neighbour's doesn't. Over-allocated stays
+   amber unconditionally (it's the one figure that's always worth a calm
+   reminder of); On hold / At-risk only pick up the amber "attention" accent
+   once their count is non-zero, same semantics as .cell-amber/.sev-review
+   elsewhere. */
+.kpi-row-1, .kpi-row-2 { grid-template-columns: repeat(6, 1fr); }
+@media (max-width: 1100px) { .kpi-row-1, .kpi-row-2 { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 640px) { .kpi-row-1, .kpi-row-2 { grid-template-columns: repeat(2, 1fr); } }
+.kpi-row-2 { margin-top: 12px; }
 .kpi-hero .kpi-card-warn { border-top-color: var(--amber); }
 .kpi-hero .kpi-card-warn .kpi-value { color: var(--amber); }
 

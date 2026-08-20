@@ -1649,6 +1649,13 @@
     const upcomingProjects = STATE.projects.filter((p) => p.start && p.start > asOf).sort((a, b) => a.start.localeCompare(b.start));
     const atRiskProjects = [...d.critical, ...d.review].map((h) => ({ project: h.project, score: h.monthly[mIdx].score, flag: h.monthly[mIdx].flag }));
 
+    // On-hold projects, as of the same date scope d.statusCounts["On Hold"]
+    // already uses (projectInMonth) — folded in here so the narrative
+    // summary carries the "N on hold" signal the removed MoM trend chart
+    // used to show, instead of dropping it. Named list capped the same way
+    // every other exec-summary bucket is.
+    const onHoldProjects = STATE.projects.filter((p) => p.status === "On Hold" && projectInMonth(p, mIdx));
+
     // Notable notes — a handful of short excerpts, not a full dump of the
     // Notes column. At-risk projects first (most actionable), then other
     // Active projects with notes, then recently-completed ones — capped at
@@ -1672,7 +1679,7 @@
     return {
       asOf, mIdx, quarterLabel,
       completedRecent, newlyLaunched, backFromLeave,
-      activeProjects, upcomingProjects, atRiskProjects,
+      activeProjects, upcomingProjects, atRiskProjects, onHoldProjects,
       notableNotes,
     };
   }
@@ -2060,6 +2067,9 @@
     nsBits.push(x.upcomingProjects.length
       ? `<b>${x.upcomingProjects.length}</b> project${x.upcomingProjects.length === 1 ? "" : "s"} scheduled to start after ${esc(asOfLabel)}: ${nameList(x.upcomingProjects, 4)}.`
       : `Nothing scheduled to start after ${esc(asOfLabel)}.`);
+    nsBits.push(x.onHoldProjects.length
+      ? `<b>${x.onHoldProjects.length}</b> project${x.onHoldProjects.length === 1 ? "" : "s"} currently on hold: ${nameList(x.onHoldProjects, 4)}.`
+      : `Nothing currently on hold as of ${esc(asOfLabel)}.`);
 
     const riskBits = [];
     riskBits.push(x.atRiskProjects.length
@@ -2234,8 +2244,12 @@
         </button>`
     ).join("");
 
-    // Item F — MoM new/completed/on-hold project trend chart.
-    const momChart = momTrendSvg(d.momTrend, STATE.months);
+    // Item F — MoM new/completed/on-hold project trend: the standalone
+    // chart panel was removed per feedback (its "no data yet" state read
+    // as clutter); the same signal now lives as a narrative line in the
+    // Executive summary's Next steps column (see computeExecSummary's
+    // onHoldProjects + d.momSummaryText, both already date-scoped to
+    // DASHBOARD_ASOF), so nothing here is silently lost.
 
     // Billable vs non-billable, by project group (item 3) — Core excluded
     // (always non-billable by definition, so it carries no signal here).
@@ -2275,9 +2289,9 @@
         </div>
       </div>
 
-      <div class="kpi-grid kpi-hero">
+      <div class="kpi-grid kpi-hero kpi-row-1">
         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="resources">
-          <div class="kpi-label">Resources</div><div class="kpi-value">${d.totalResources}</div>
+          <div class="kpi-label">Resources</div><div class="kpi-value">${d.totalResources}</div><div class="kpi-sub muted">across the team</div>
         </button>
         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="Active">
           <div class="kpi-label">Active projects</div><div class="kpi-value">${d.activeProjectCount}</div><div class="kpi-sub muted">as of ${esc(curLabel)}</div>
@@ -2288,6 +2302,15 @@
         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="All" data-project-billable="false">
           <div class="kpi-label">Non-billable projects</div><div class="kpi-value">${d.nonBillableCount}</div><div class="kpi-sub muted">${d.nonBillablePct}% as of ${esc(curLabel)}</div>
         </button>
+        <button type="button" class="kpi-card clickable ${(d.statusCounts["On Hold"] || 0) > 0 ? "kpi-card-warn" : ""}" data-action="goto" data-tab="projects" data-status-filter="On Hold">
+          <div class="kpi-label">On hold</div><div class="kpi-value">${d.statusCounts["On Hold"] || 0}</div><div class="kpi-sub muted">as of ${esc(curLabel)}</div>
+        </button>
+        <button type="button" class="kpi-card clickable ${(d.critical.length + d.review.length) > 0 ? "kpi-card-warn" : ""}" data-action="goto" data-tab="insights" data-subtab="health">
+          <div class="kpi-label">At-risk projects</div><div class="kpi-value">${d.critical.length + d.review.length}</div><div class="kpi-sub muted">critical + needs review</div>
+        </button>
+      </div>
+
+      <div class="kpi-grid kpi-hero kpi-row-2">
         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="actuals">
           <div class="kpi-label">Billable hours <span class="src-pill src-pill-${d.billableHoursThisMonth.source}">${d.billableHoursThisMonth.source === "actual" ? "Actual" : "Planned (est.)"}</span></div>
           <div class="kpi-value">${d.billableHoursThisMonth.billableHours}h</div><div class="kpi-sub muted">${esc(curLabel)}</div>
@@ -2297,16 +2320,16 @@
           <div class="kpi-value">${d.billableHoursThisMonth.nonBillableHours}h</div><div class="kpi-sub muted">${esc(curLabel)}</div>
         </button>
         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="insights" data-subtab="utilisation">
-          <div class="kpi-label">Avg utilisation</div><div class="kpi-value">${d.avgUtilThisMonth == null ? "—" : d.avgUtilThisMonth + "%"}</div><div class="kpi-sub muted">this month</div>
+          <div class="kpi-label">Avg utilisation</div><div class="kpi-value">${d.avgUtilThisMonth == null ? "—" : d.avgUtilThisMonth + "%"}</div><div class="kpi-sub muted">as of ${esc(curLabel)}</div>
         </button>
         <button type="button" class="kpi-card clickable kpi-card-warn" data-action="goto" data-tab="insights" data-subtab="utilisation">
-          <div class="kpi-label">Over-allocated</div><div class="kpi-value">${d.over.length}</div><div class="kpi-sub muted">resources this month</div>
+          <div class="kpi-label">Over-allocated</div><div class="kpi-value">${d.over.length}</div><div class="kpi-sub muted">resources, as of ${esc(curLabel)}</div>
         </button>
         <button type="button" class="kpi-card clickable" data-action="scroll-to" data-target="attentionPanel">
           <div class="kpi-label">Needs attention</div><div class="kpi-value">${projectItems.length + resourceItems.length}</div><div class="kpi-sub muted">projects + resources</div>
         </button>
         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="resources">
-          <div class="kpi-label">Leave days this month</div><div class="kpi-value">${d.leaveDays}</div><div class="kpi-sub muted">total days logged, ${esc(curLabel)}</div>
+          <div class="kpi-label">Leave days</div><div class="kpi-value">${d.leaveDays}</div><div class="kpi-sub muted">total days logged, ${esc(curLabel)}</div>
         </button>
       </div>
 
@@ -2321,13 +2344,6 @@
           <p class="muted">Total, billable-work, and non-billable-work utilisation % across every resource, month by month, against actual average available capacity (holiday-adjusted). <span class="legend-dot" style="background:var(--brand)"></span> as-of month. Billable/non-billable points are <b>Actual</b> (filled dot) for any month with an imported actuals file, <b>Planned estimate</b> (hollow dot) otherwise.</p>
           ${utilTrendSvg({ total: d.monthlyAvgUtil, billable: d.monthlyBillableUtil, nonBillable: d.monthlyNonBillableUtil, capacity: d.monthlyAvgCap, billableSource: d.monthlyBillableSource }, STATE.months, d.mIdx)}
         </div>
-      </div>
-
-      <div class="panel chart-panel">
-        <h2>Projects — new vs completed vs on hold <span class="muted">— ${esc(STATE.meta.fyLabel)}, through ${esc(curLabel)}</span></h2>
-        ${momChart}
-        <p class="mom-summary">${d.momSummaryText}</p>
-        <p class="muted mom-note">Note on method: "New" = project start date falls in that month. "Completed" = project's current status is Completed and its end date falls in that month (used as a proxy — this data model has no "status changed on" timestamp). "On hold" has no date signal at all, so rather than invent one, the current on-hold total is shown only as a snapshot in the as-of month's bar, not spread across prior months.</p>
       </div>
 
       <div class="grid-2">
@@ -2890,24 +2906,18 @@
       { key: "status", label: "Status", hideable: true },
     ];
 
-    // Planned vs Actual chart — scoped to the Dashboard's "as of" filter
-    // (DASHBOARD_ASOF) the same way every other date-reactive figure in the
-    // app already is, trailing PLANNED_VS_ACTUAL_TRAILING_MONTHS months
-    // ending at that month (the Insights tab has no month-range control of
-    // its own to defer to). Only draws real bars for months an actuals
-    // import actually covers — see plannedVsActualSvg's own comment.
-    const pvaAsOfMIdx = monthIndexForDate(DASHBOARD_ASOF);
-    const pvaRange = defaultPlannedVsActualRange(pvaAsOfMIdx);
-    const pvaRows = computePlannedVsActualUtil(pvaRange);
-    const pvaPanel = `
-      <div class="panel chart-panel">
-        <h2>Planned vs Actual utilisation <span class="muted">— trailing ${pvaRows.length} month${pvaRows.length === 1 ? "" : "s"}, through ${esc(STATE.months[pvaAsOfMIdx].label)}</span></h2>
-        <p class="muted">Planned = allocated % ÷ capacity, averaged across resources (same figure as the table below). Actual = imported hours (Actuals tab) ÷ capacity, for any month with a completed import. Months with nothing imported yet show as "no data", not 0%.</p>
-        ${plannedVsActualSvg(pvaRows)}
-      </div>`;
+    // Planned vs Actual chart — removed from this view per feedback (it
+    // showed nothing but "no data" placeholders until an actuals import
+    // exists); the underlying Actual-vs-Planned signal isn't lost — it
+    // still drives the Dashboard's Utilisation trend chart (dots switch
+    // from hollow/planned to filled/actual per month) and the "Actual vs
+    // planned gap" Needs-attention trigger (see
+    // actualVsPlannedGapForResource / ATTN_ACTUAL_VS_PLANNED_GAP_PCT).
+    // computePlannedVsActualUtil/plannedVsActualSvg/defaultPlannedVsActualRange
+    // are kept, unused for now, in case a future round wants this chart
+    // back once real actuals data exists.
 
     return `
-      ${pvaPanel}
       <div class="panel">
         <h2>Utilisation <span class="muted">— auto-calculated, do not edit</span></h2>
         <p class="muted">Util % = Allocated % ÷ Available Capacity % × 100. &nbsp; <span class="legend-dot cell-red"></span> &gt;100% over &nbsp; <span class="legend-dot cell-green"></span> 70–100% healthy &nbsp; <span class="legend-dot cell-blue"></span> &lt;70% under-utilised.</p>
