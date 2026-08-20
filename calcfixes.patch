@@ -1,0 +1,218 @@
+diff --git a/public/app.js b/public/app.js
+index dc00f14..255bc43 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -1376,29 +1376,42 @@
+     const review = activeProjectsThisMonth.filter((h) => h.monthly[mIdx].flag === "R");
+     const ok = activeProjectsThisMonth.filter((h) => h.monthly[mIdx].flag === "OK");
+ 
+-    // Projects whose [start, end] window covers the as-of date — the one
+-    // date-scoped "in scope as of <date>" set every date-reactive
+-    // project-count figure below (active count, billable/non-billable
+-    // tiles, status breakdown) is built from. Projects with no start/end
+-    // set at all fall through projectInMonth's `!project.start` /
+-    // `!project.end` checks and count as always-in-scope, same convention
+-    // the rest of the app already uses for undated projects.
+-    const projectsAsOf = STATE.projects.filter((p) => projectInMonth(p, mIdx));
+-
+-    const activeProjectCount = projectsAsOf.filter((p) => p.status === "Active").length;
+-
+-    // Item E — status breakdown, now date-scoped to projectsAsOf so the
+-    // vertical status summary actually moves when the date filter changes
+-    // (a plain "count of every project's current status" wouldn't).
++    // Bug fix (reported: Dashboard's per-status counts didn't match the
++    // Projects tab for the same data): status/billable counts here used to
++    // be scoped to projectInMonth(p, mIdx) — "does this project's
++    // [start, end] window cover the as-of date" — on the theory that this
++    // would make the figures react to the date filter. In practice that's
++    // the wrong test for a field with no history: `status` and `billable`
++    // are current-state flags, not per-month data (this app has no
++    // "status changed on" timestamp anywhere — see the MoM-trend and
++    // exec-summary comments elsewhere), so a project whose end date has
++    // simply passed while its status is still "Active" (a real, common
++    // case in this data — see e.g. Accounts Payable, end 2026-07-31,
++    // status Active) was silently dropped from every count below, while
++    // the Projects tab's own filter chips (STATE.projects.filter(p =>
++    // p.status === s), never date-scoped) kept counting it — producing
++    // two different numbers for the same status on the same page. Fixed
++    // by counting raw STATE.projects here too, so these figures always
++    // agree with the Projects tab you land on when you click through.
++    // Genuinely monthly figures (utilisation, health scores, hours,
++    // allocation-based Needs-attention checks) are unaffected — those
++    // keep their own, legitimate per-month scoping further down/elsewhere.
++    const activeProjectCount = STATE.projects.filter((p) => p.status === "Active").length;
++
++    // Item E — status breakdown. See bug-fix note above: intentionally NOT
++    // date-scoped any more, so it always matches the Projects tab's chips.
+     const statusCounts = {};
+     STATUS_OPTIONS.forEach((s) => { statusCounts[s] = 0; });
+-    projectsAsOf.forEach((p) => { statusCounts[p.status] = (statusCounts[p.status] || 0) + 1; });
++    STATE.projects.forEach((p) => { statusCounts[p.status] = (statusCounts[p.status] || 0) + 1; });
+ 
+-    // Item B — billable/non-billable hero KPI tiles, date-scoped the same way.
+-    const billableCount = projectsAsOf.filter((p) => p.billable !== false).length;
+-    const nonBillableCount = projectsAsOf.length - billableCount;
+-    const billablePct = projectsAsOf.length ? round((billableCount / projectsAsOf.length) * 100, 0) : 0;
+-    const nonBillablePct = projectsAsOf.length ? round((nonBillableCount / projectsAsOf.length) * 100, 0) : 0;
++    // Item B — billable/non-billable hero KPI tiles. Same fix: raw counts,
++    // matching the Projects tab and the (already-unscoped)
++    // billableByGroup breakdown further down, instead of a third, silently
++    // different number.
++    const billableCount = STATE.projects.filter((p) => p.billable !== false).length;
++    const nonBillableCount = STATE.projects.length - billableCount;
++    const billablePct = STATE.projects.length ? round((billableCount / STATE.projects.length) * 100, 0) : 0;
++    const nonBillablePct = STATE.projects.length ? round((nonBillableCount / STATE.projects.length) * 100, 0) : 0;
+ 
+     // ---- Utilisation trend — average utilisation % across every resource,
+     // for every month in the FY (not just the current one). Feeds the
+@@ -1474,7 +1487,6 @@
+       totalResources: STATE.resources.length,
+       totalProjects: STATE.projects.length,
+       totalAllocationRows: STATE.allocations.length,
+-      projectsAsOfCount: projectsAsOf.length,
+       activeProjectCount,
+       statusCounts,
+       billableCount, nonBillableCount, billablePct, nonBillablePct, billableByGroup,
+@@ -1641,20 +1653,25 @@
+       ? STATE.resources.filter((r) => r.capNotes && r.capNotes[mIdx - 1] && !r.capNotes[mIdx])
+       : [];
+ 
+-    // Next steps — active-as-of-asOf, upcoming (start after asOf, may be
++    // Next steps — currently active, upcoming (start after asOf, may be
+     // none), and at-risk (reusing computeDashboard()'s own critical/review
+     // split for this exact asOf, so the count here can never drift from
+-    // what Needs-attention shows).
+-    const activeProjects = STATE.projects.filter((p) => p.status === "Active" && projectInMonth(p, mIdx));
++    // what Needs-attention shows). "Active"/"On hold" here are raw status
++    // counts, matching d.activeProjectCount / d.statusCounts["On Hold"] and
++    // the Projects tab's own filter chips — see the bug-fix note on
++    // computeDashboard's activeProjectCount for why these deliberately do
++    // NOT gate on projectInMonth(p, mIdx): status has no history, so a
++    // project whose end date has simply passed while it's still marked
++    // Active must still count as Active, not silently drop out.
++    const activeProjects = STATE.projects.filter((p) => p.status === "Active");
+     const upcomingProjects = STATE.projects.filter((p) => p.start && p.start > asOf).sort((a, b) => a.start.localeCompare(b.start));
+     const atRiskProjects = [...d.critical, ...d.review].map((h) => ({ project: h.project, score: h.monthly[mIdx].score, flag: h.monthly[mIdx].flag }));
+ 
+-    // On-hold projects, as of the same date scope d.statusCounts["On Hold"]
+-    // already uses (projectInMonth) — folded in here so the narrative
+-    // summary carries the "N on hold" signal the removed MoM trend chart
+-    // used to show, instead of dropping it. Named list capped the same way
+-    // every other exec-summary bucket is.
+-    const onHoldProjects = STATE.projects.filter((p) => p.status === "On Hold" && projectInMonth(p, mIdx));
++    // On-hold projects — folded in here so the narrative summary carries
++    // the "N on hold" signal the removed MoM trend chart used to show,
++    // instead of dropping it. Named list capped the same way every other
++    // exec-summary bucket is.
++    const onHoldProjects = STATE.projects.filter((p) => p.status === "On Hold");
+ 
+     // Notable notes — a handful of short excerpts, not a full dump of the
+     // Notes column. At-risk projects first (most actionable), then other
+@@ -2063,13 +2080,13 @@
+     }
+ 
+     const nsBits = [];
+-    nsBits.push(`<b>${x.activeProjects.length}</b> project${x.activeProjects.length === 1 ? "" : "s"} active as of ${esc(asOfLabel)}${x.activeProjects.length ? `: ${nameList(x.activeProjects, 5)}` : ""}.`);
++    nsBits.push(`<b>${x.activeProjects.length}</b> project${x.activeProjects.length === 1 ? "" : "s"} currently active${x.activeProjects.length ? `: ${nameList(x.activeProjects, 5)}` : ""}.`);
+     nsBits.push(x.upcomingProjects.length
+       ? `<b>${x.upcomingProjects.length}</b> project${x.upcomingProjects.length === 1 ? "" : "s"} scheduled to start after ${esc(asOfLabel)}: ${nameList(x.upcomingProjects, 4)}.`
+       : `Nothing scheduled to start after ${esc(asOfLabel)}.`);
+     nsBits.push(x.onHoldProjects.length
+       ? `<b>${x.onHoldProjects.length}</b> project${x.onHoldProjects.length === 1 ? "" : "s"} currently on hold: ${nameList(x.onHoldProjects, 4)}.`
+-      : `Nothing currently on hold as of ${esc(asOfLabel)}.`);
++      : `Nothing currently on hold.`);
+ 
+     const riskBits = [];
+     riskBits.push(x.atRiskProjects.length
+@@ -2155,7 +2172,9 @@
+   // already uses (see computeDashboard's projectsAsOf).
+   function computeProjectsNeedingAttention(mIdx) {
+     const items = [];
+-    const projectsAsOf = STATE.projects.filter((p) => projectInMonth(p, mIdx));
++    // Health-score flags (Critical/Needs review) are genuinely monthly —
++    // h.monthly[mIdx] is a real per-month score — so projectInMonth gating
++    // here is correct and unchanged.
+     computeProjectHealth().forEach((h) => {
+       if (!projectInMonth(h.project, mIdx)) return;
+       const m = h.monthly[mIdx];
+@@ -2165,20 +2184,33 @@
+         items.push({ kind: "Needs review", cls: "sev-review", icon: "⚠", name: h.project.name, value: `${m.score}%`, highlight: `proj-${h.project.id}`, sortKey: 200 });
+       }
+     });
+-    projectsAsOf.forEach((p) => {
+-      const shortfall = projectRoleFillCounts(p).filter((r) => r.assigned < r.needed);
+-      if (shortfall.length) {
+-        items.push({
+-          kind: "Understaffed roles", cls: "sev-review", icon: "🧩", name: p.name,
+-          value: `${shortfall.length} role${shortfall.length === 1 ? "" : "s"} short`, highlight: `proj-${p.id}`, sortKey: 150,
+-        });
++    // Bug fix (same root cause as computeDashboard's activeProjectCount —
++    // see its comment): status, role requirements, and lifetime allocation
++    // presence are none of them month-indexed data, so gating these three
++    // checks on projectInMonth(p, mIdx) silently dropped real issues on
++    // any project whose end date had simply passed while it was still
++    // marked Active (e.g. a stale project no one updated to Completed) —
++    // exactly the projects that most need surfacing here. Checked over all
++    // of STATE.projects now, with an explicit status==="Active" guard added
++    // to "Understaffed roles" (it didn't have one before) so a Completed
++    // or not-yet-started Pipeline project's role requirements can't get
++    // flagged as a staffing gap — only currently-active work can.
++    STATE.projects.forEach((p) => {
++      if (p.status === "Active") {
++        const shortfall = projectRoleFillCounts(p).filter((r) => r.assigned < r.needed);
++        if (shortfall.length) {
++          items.push({
++            kind: "Understaffed roles", cls: "sev-review", icon: "🧩", name: p.name,
++            value: `${shortfall.length} role${shortfall.length === 1 ? "" : "s"} short`, highlight: `proj-${p.id}`, sortKey: 150,
++          });
++        }
++        if (!allocsForProject(p.id).length) {
++          items.push({ kind: "No allocations", cls: "sev-critical", icon: "🚫", name: p.name, value: "Unstaffed", highlight: `proj-${p.id}`, sortKey: 250 });
++        }
+       }
+       if (p.status === "On Hold") {
+         items.push({ kind: "On hold", cls: "sev-review", icon: "⏸", name: p.name, value: "On hold", highlight: `proj-${p.id}`, sortKey: 120 });
+       }
+-      if (p.status === "Active" && !allocsForProject(p.id).length) {
+-        items.push({ kind: "No allocations", cls: "sev-critical", icon: "🚫", name: p.name, value: "Unstaffed", highlight: `proj-${p.id}`, sortKey: 250 });
+-      }
+     });
+     return items.sort((a, b) => b.sortKey - a.sortKey);
+   }
+@@ -2294,16 +2326,16 @@
+           <div class="kpi-label">Resources</div><div class="kpi-value">${d.totalResources}</div><div class="kpi-sub muted">across the team</div>
+         </button>
+         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="Active">
+-          <div class="kpi-label">Active projects</div><div class="kpi-value">${d.activeProjectCount}</div><div class="kpi-sub muted">as of ${esc(curLabel)}</div>
++          <div class="kpi-label">Active projects</div><div class="kpi-value">${d.activeProjectCount}</div><div class="kpi-sub muted">of ${d.totalProjects} total</div>
+         </button>
+         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="All" data-project-billable="true">
+-          <div class="kpi-label">Billable projects</div><div class="kpi-value">${d.billableCount}</div><div class="kpi-sub muted">${d.billablePct}% as of ${esc(curLabel)}</div>
++          <div class="kpi-label">Billable projects</div><div class="kpi-value">${d.billableCount}</div><div class="kpi-sub muted">${d.billablePct}% of ${d.totalProjects} total</div>
+         </button>
+         <button type="button" class="kpi-card clickable" data-action="goto" data-tab="projects" data-status-filter="All" data-project-billable="false">
+-          <div class="kpi-label">Non-billable projects</div><div class="kpi-value">${d.nonBillableCount}</div><div class="kpi-sub muted">${d.nonBillablePct}% as of ${esc(curLabel)}</div>
++          <div class="kpi-label">Non-billable projects</div><div class="kpi-value">${d.nonBillableCount}</div><div class="kpi-sub muted">${d.nonBillablePct}% of ${d.totalProjects} total</div>
+         </button>
+         <button type="button" class="kpi-card clickable ${(d.statusCounts["On Hold"] || 0) > 0 ? "kpi-card-warn" : ""}" data-action="goto" data-tab="projects" data-status-filter="On Hold">
+-          <div class="kpi-label">On hold</div><div class="kpi-value">${d.statusCounts["On Hold"] || 0}</div><div class="kpi-sub muted">as of ${esc(curLabel)}</div>
++          <div class="kpi-label">On hold</div><div class="kpi-value">${d.statusCounts["On Hold"] || 0}</div><div class="kpi-sub muted">current status</div>
+         </button>
+         <button type="button" class="kpi-card clickable ${(d.critical.length + d.review.length) > 0 ? "kpi-card-warn" : ""}" data-action="goto" data-tab="insights" data-subtab="health">
+           <div class="kpi-label">At-risk projects</div><div class="kpi-value">${d.critical.length + d.review.length}</div><div class="kpi-sub muted">critical + needs review</div>
+@@ -2348,13 +2380,13 @@
+ 
+       <div class="grid-2">
+         <div class="panel">
+-          <h2>Projects by status <span class="muted">— as of ${esc(curLabel)}, click to filter</span></h2>
++          <h2>Projects by status <span class="muted">— current, click to filter</span></h2>
+           <div class="status-stack">${statusStackRows}</div>
+         </div>
+ 
+         <div class="panel">
+           <h2>Billable vs non-billable <span class="muted">— by group</span></h2>
+-          <p class="muted">Overall as of ${esc(curLabel)}: <b>${d.billableCount}</b> billable (${d.billablePct}%) &middot; <b>${d.nonBillableCount}</b> non-billable. Core excluded below — it's always non-billable by definition, so it adds no signal to this breakdown.</p>
++          <p class="muted">Overall: <b>${d.billableCount}</b> billable (${d.billablePct}%) &middot; <b>${d.nonBillableCount}</b> non-billable. Core excluded below — it's always non-billable by definition, so it adds no signal to this breakdown.</p>
+           <div class="billing-group-grid">${billingGroupCards}</div>
+         </div>
+       </div>
