@@ -392,6 +392,22 @@ textarea.notes-input::placeholder { color: var(--muted); opacity: 0.65; font-sty
 .modal-suggest:empty { padding: 0; }
 .modal-actions { margin-top: 16px; }
 
+/* "Add assignment" modal (Allocations tab) — same modal-box/modal-label
+   pattern as the holiday note modal above, just a touch wider to fit the
+   Project/Resource selects and role-fill chips comfortably. */
+.add-assignment-box { width: 480px; }
+.alloc-hint { font-size: 11.5px; margin: 4px 0 0; min-height: 14px; }
+
+/* Role-fill counts (Item 3) — compact, numbers-only "Role X/Y" chips.
+   Shared between the small summary strip above the Allocations table and
+   the live context inside the "Add assignment" modal, so both read
+   identically. Colour reuses the app's existing txt-red/txt-amber/
+   txt-green vocabulary (see .role-fill-chip's cls in roleFillChipsHtml). */
+.role-fill-summary { font-size: 12.5px; margin: 4px 0 12px; }
+.role-fill-row { margin-top: 4px; }
+.role-fill-chip { display: inline-block; margin: 2px 10px 2px 0; font-size: 12px; }
+.role-fill-chip b { font-variant-numeric: tabular-nums; }
+
 /* Header — logged-in user chip */
 .user-chip {
   font-family: var(--font-sub); font-size: 12px; font-weight: 600; color: var(--navy);

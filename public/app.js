@@ -815,6 +815,56 @@
   }
 
   // ---------------------------------------------------------------------
+  // COMPUTE: Role-fill counts for a project — a plain, numbers-only view
+  // of "how many resources are planned on this project, per role" vs. how
+  // many the role's required % implies are needed. Feeds the Allocations
+  // tab's compact role-fill indicator (both the "Add assignment" modal's
+  // live context and the small summary strip above the table) — kept
+  // deliberately numeric (X/Y counts), not a chart, per spec.
+  //
+  // A project's role requirement is stored as a %, not a headcount (e.g.
+  // "Backend Engineer: 150%" means 1.5 FTE-equivalents of Backend Engineer
+  // work), so "needed" headcount is a judgment-call conversion:
+  // ceil(requiredPct / 100), floored at 1 for any role required above 0%.
+  // "Assigned" counts DISTINCT resources of that role with a non-zero %
+  // in ANY month of this project's allocation rows (not just the current
+  // month) — a resource "planned" for a future phase still counts, since
+  // this is about staffing coverage, not current utilisation.
+  // ---------------------------------------------------------------------
+  function projectRoleFillCounts(project) {
+    const allocs = allocsForProject(project.id);
+    const roleEntries = Object.entries(project.roles || {}).filter(([, v]) => num(v, 0) > 0);
+    return roleEntries.map(([role, pct]) => {
+      const resIds = new Set(
+        allocs
+          .filter((a) => {
+            const r = getResource(a.resourceId);
+            return r && r.role === role && a.months.some((m) => num(m, 0) > 0);
+          })
+          .map((a) => a.resourceId)
+      );
+      const needed = Math.max(1, Math.ceil(num(pct, 0) / 100));
+      return { role, requiredPct: num(pct, 0), assigned: resIds.size, needed };
+    });
+  }
+
+  // Compact "Role X/Y" chip row — the on-screen rendering of the counts
+  // above. Colour mirrors the app's existing txt-red/txt-amber/txt-green
+  // vocabulary (already used for Project validation) rather than inventing
+  // a new one: green = fully covered, amber = partially covered, red = no
+  // one of that role assigned yet.
+  function roleFillChipsHtml(project) {
+    const rows = projectRoleFillCounts(project);
+    if (!rows.length) return '<span class="muted">No role requirements defined for this project.</span>';
+    return rows
+      .map((r) => {
+        const cls = r.assigned >= r.needed ? "txt-green" : r.assigned > 0 ? "txt-amber" : "txt-red";
+        return `<span class="role-fill-chip ${cls}" title="${esc(r.role)} — ${esc(r.requiredPct)}% required, ~${esc(r.needed)} planned">${esc(r.role)} <b>${r.assigned}/${r.needed}</b></span>`;
+      })
+      .join("");
+  }
+
+  // ---------------------------------------------------------------------
   // COMPUTE: Project Allocation Health (role-weighted score)
   // ---------------------------------------------------------------------
   function projectScoreForMonth(project, mIdx) {
@@ -1575,16 +1625,29 @@
   // View: Allocations (Capacity Planner)
   // ---------------------------------------------------------------------
   const ALLOC_TABLE = "allocations";
+  // Shared filter-match functions for the Allocations table — used both by
+  // viewAllocations()'s own applyFilters() call and by
+  // revealAllocationRow() (see addAllocation flow below), which needs the
+  // exact same logic to detect "would this filter hide the row I just
+  // added?" without duplicating it.
+  function allocMatchFns() {
+    return {
+      resourceId: (a, v) => a.resourceId === v,
+      projectId: (a, v) => a.projectId === v,
+      // Item 4: Project status column — filterable exactly like every
+      // other column on this table via the shared TABLE_FILTER mechanism.
+      status: (a, v) => { const p = getProject(a.projectId); return !!p && p.status === v; },
+    };
+  }
+
   function viewAllocations() {
     const cur = currentMonthIndex();
 
-    let rows = applyFilters(ALLOC_TABLE, STATE.allocations, {
-      resourceId: (a, v) => a.resourceId === v,
-      projectId: (a, v) => a.projectId === v,
-    });
+    let rows = applyFilters(ALLOC_TABLE, STATE.allocations, allocMatchFns());
     rows = applySort(ALLOC_TABLE, rows, {
       resourceName: (a) => { const r = getResource(a.resourceId); return r ? r.name : ""; },
       projectName: (a) => { const p = getProject(a.projectId); return p ? p.name : ""; },
+      status: (a) => { const p = getProject(a.projectId); return p ? p.status : ""; },
       avg: (a) => round(a.months.reduce((s, v) => s + num(v, 0), 0) / 12, 0),
       ...Object.fromEntries(STATE.months.map((m, i) => [`m${i}`, (a) => num(a.months[i], 0)])),
     });
@@ -1632,6 +1695,7 @@
               ${STATE.projects.map((p) => `<option value="${p.id}" ${p.id === a.projectId ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
             </select>
           </td>
+          <td class="readonly">${proj ? statusBadge(proj.status) : "—"}</td>
           ${monthCells}
           <td class="readonly">${avg}%</td>
           <td><button class="btn btn-danger btn-xs" data-action="delete-allocation" data-id="${a.id}">Delete</button></td>
@@ -1642,18 +1706,32 @@
       { key: "resourceName", label: "Resource", hideable: false },
       { key: "role", label: "Role (auto)", hideable: true },
       { key: "projectName", label: "Project", hideable: true },
+      { key: "status", label: "Project status", hideable: true },
       ...STATE.months.map((m, i) => ({ key: `m${i}`, label: m.label, hideable: true })),
       { key: "avg", label: "Avg %", hideable: true },
       { key: "_actions", label: "", hideable: false },
     ];
 
+    // Item 3: compact, numbers-only role-fill readout — shown above the
+    // table only when the Allocations tab is itself filtered down to a
+    // single project (the common "I'm staffing this one project" moment),
+    // so it never adds a permanent line to every view. Per-row/per-cell
+    // versions were deliberately avoided — see projectRoleFillCounts's
+    // comment — to keep the grid itself uncomplicated, as asked.
+    const filteredProjectId = getFilter(ALLOC_TABLE, "projectId");
+    const filteredProject = filteredProjectId ? getProject(filteredProjectId) : null;
+    const roleFillSummary = filteredProject
+      ? `<div class="role-fill-summary"><b>${esc(filteredProject.name)} — resources planned per role:</b> ${roleFillChipsHtml(filteredProject)}</div>`
+      : `<div class="role-fill-summary muted">Filter by a single project (below) to see how many resources are planned per required role.</div>`;
+
     return `
       <div class="panel">
         <div class="panel-head">
           <h2>Allocations — capacity planner (% per resource × project × month)</h2>
-          <button class="btn btn-primary" data-action="add-allocation">+ Add allocation</button>
+          <button class="btn btn-primary" data-action="add-allocation">+ Add assignment</button>
         </div>
         <p class="muted">Enter allocation % (0–100) per month. Role fills in automatically from the Resources register, so it can never drift out of sync. Each cell's small subtext is that resource's remaining hours that month (capacity % × working hours, across every project they're on) — cell colour matches the same over/healthy/under-allocated verdict as the Utilisation tab, so a capacity % reduced for a logged holiday shows up here too. &nbsp; <span class="legend-dot cell-red"></span> over-allocated &nbsp; <span class="legend-dot cell-green"></span> healthy &nbsp; <span class="legend-dot cell-blue"></span> under-utilised.</p>
+        ${roleFillSummary}
         <div class="table-toolbar">
           <span class="muted">Click a column header to sort. Use the boxes under the headers to filter.</span>
           <div class="table-toolbar-actions">
@@ -1666,7 +1744,7 @@
             ${colGroupHtml(ALLOC_TABLE, allocColumns)}
             <thead>
               <tr>
-                ${thSort(ALLOC_TABLE, "resourceName", "Resource", "sticky-col")}<th>Role (auto)</th>${thSort(ALLOC_TABLE, "projectName", "Project")}
+                ${thSort(ALLOC_TABLE, "resourceName", "Resource", "sticky-col")}<th>Role (auto)</th>${thSort(ALLOC_TABLE, "projectName", "Project")}${thSort(ALLOC_TABLE, "status", "Project status")}
                 ${monthSortHeaderCells(ALLOC_TABLE, "m")}
                 ${thSort(ALLOC_TABLE, "avg", "Avg %")}<th></th>
               </tr>
@@ -1674,10 +1752,11 @@
                 <td class="sticky-col">${filterSelectInputLabeled(ALLOC_TABLE, "resourceId", STATE.resources.map((r) => ({ value: r.id, label: r.name })), "All resources")}</td>
                 <td></td>
                 <td>${filterSelectInputLabeled(ALLOC_TABLE, "projectId", STATE.projects.map((p) => ({ value: p.id, label: p.name })), "All projects")}</td>
+                <td>${filterSelectInput(ALLOC_TABLE, "status", STATUS_OPTIONS)}</td>
                 <td colspan="${STATE.months.length + 2}"></td>
               </tr>
             </thead>
-            <tbody>${rowsHtml || `<tr><td colspan="18" class="muted center">${STATE.allocations.length ? "No allocations match this filter." : "No allocations yet — click “Add allocation”."}</td></tr>`}</tbody>
+            <tbody>${rowsHtml || `<tr><td colspan="19" class="muted center">${STATE.allocations.length ? "No allocations match this filter." : "No allocations yet — click “Add assignment”."}</td></tr>`}</tbody>
           </table>
         </div>
       </div>
@@ -2275,7 +2354,7 @@
     // add / delete buttons
     view.querySelectorAll('[data-action="add-resource"]').forEach((b) => b.addEventListener("click", addResource));
     view.querySelectorAll('[data-action="add-project"]').forEach((b) => b.addEventListener("click", addProject));
-    view.querySelectorAll('[data-action="add-allocation"]').forEach((b) => b.addEventListener("click", addAllocation));
+    view.querySelectorAll('[data-action="add-allocation"]').forEach((b) => b.addEventListener("click", openAddAssignmentModal));
     view.querySelectorAll('[data-action="delete-resource"]').forEach((b) => b.addEventListener("click", () => deleteResource(b.dataset.id)));
     view.querySelectorAll('[data-action="delete-project"]').forEach((b) => b.addEventListener("click", () => deleteProject(b.dataset.id)));
     view.querySelectorAll('[data-action="delete-allocation"]').forEach((b) => b.addEventListener("click", () => deleteAllocation(b.dataset.id)));
@@ -2645,18 +2724,185 @@
       alert("Couldn't add project: " + err.message);
     }
   }
-  async function addAllocation() {
+  // After an allocation row is created (or, in principle, whenever a row
+  // might have just become relevant), guarantee it's actually visible: if
+  // any of the Allocations table's own active filters would hide this
+  // exact row, clear just that filter (not the whole filter set) rather
+  // than leaving the user staring at an unchanged table wondering whether
+  // anything happened — that silent mismatch is the root cause fixed here
+  // (see the long comment on POST /api/allocations in
+  // server/routes/allocations.js). Then scroll to it and flash it, reusing
+  // the same highlight goToTab() already uses elsewhere in this app.
+  function revealAllocationRow(allocId) {
+    const a = STATE.allocations.find((x) => x.id === allocId);
+    if (a) {
+      const fns = allocMatchFns();
+      const f = TABLE_FILTER[ALLOC_TABLE];
+      if (f) {
+        Object.keys(f).forEach((col) => {
+          const v = f[col];
+          if (v && fns[col] && !fns[col](a, v)) delete f[col];
+        });
+      }
+    }
+    render();
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-row-id="alloc-${allocId}"]`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("flash");
+      setTimeout(() => el.classList.remove("flash"), 2200);
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // "Add assignment" — Allocations tab (Item 2 + fix for Item 1).
+  //
+  // Replaces the old one-click "+ Add allocation" (which silently inserted
+  // a blank row for whichever resource/project happened to sort first
+  // alphabetically, then relied on the user noticing and editing it
+  // in-place — see the POST /api/allocations comment for how that produced
+  // the "adding a new row doesn't do anything" bug when a filter was
+  // active). This modal instead collects an explicit Project + Resource +
+  // allocation % from the user before creating anything.
+  //
+  // Deliberately manual throughout, per the explicit request ("do not
+  // default assign since resource may be assigned to different projects"):
+  // the Resource field always starts unselected and the Add button stays
+  // disabled until a human has chosen both a project and a resource.
+  // Role-matching only ever *surfaces* candidates (grouping resources whose
+  // Resources-tab `role` matches one of the project's required roles into
+  // their own <optgroup>, sorted to the top) — it never pre-selects,
+  // filters out, or auto-submits anything; any resource in the full list
+  // remains one click away.
+  // ---------------------------------------------------------------------
+  function openAddAssignmentModal() {
     if (!STATE.resources.length || !STATE.projects.length) {
       alert("Add at least one resource and one project first.");
       return;
     }
-    try {
-      const a = await apiPost("/allocations", {});
-      STATE.allocations.push(a);
-      await refreshDataTabCaches();
-    } catch (err) {
-      alert("Couldn't add allocation: " + err.message);
+    const projectsSorted = STATE.projects.slice().sort((a, b) => a.name.localeCompare(b.name));
+    const resourcesSorted = STATE.resources.slice().sort((a, b) => a.name.localeCompare(b.name));
+
+    // Convenience only: if the Allocations table itself is already
+    // filtered to one project, start the modal on that project — this is
+    // a filter the user themself set, not an auto-assignment. The Resource
+    // field is never pre-filled this way.
+    let selectedProjectId = getFilter(ALLOC_TABLE, "projectId") || "";
+
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-box add-assignment-box" role="dialog" aria-modal="true">
+        <h3>Add assignment</h3>
+        <p class="muted">Pick a project and a resource, then set an allocation % — nothing is chosen for you.</p>
+        <label class="modal-label">Project
+          <select id="aaProject" class="cell-input">
+            <option value="">Select a project…</option>
+            ${projectsSorted.map((p) => `<option value="${p.id}" ${p.id === selectedProjectId ? "selected" : ""}>${esc(p.name)} — ${esc(p.status)}</option>`).join("")}
+          </select>
+        </label>
+        <div class="modal-suggest" id="aaRoles"></div>
+        <label class="modal-label">Resource
+          <select id="aaResource" class="cell-input">
+            <option value="">Select a resource…</option>
+          </select>
+        </label>
+        <p class="muted alloc-hint" id="aaResourceHint"></p>
+        <label class="modal-label">Allocation % <span class="muted">— applied to every month; fine-tune individual months after adding</span>
+          <input type="number" min="0" max="100" step="5" id="aaPct" class="cell-input" value="50">
+        </label>
+        <div class="btn-row modal-actions">
+          <button type="button" class="btn btn-primary" id="aaAdd" disabled>+ Add assignment</button>
+          <button type="button" class="btn btn-ghost" id="aaCancel">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const projectSel = overlay.querySelector("#aaProject");
+    const resourceSel = overlay.querySelector("#aaResource");
+    const rolesBox = overlay.querySelector("#aaRoles");
+    const hintBox = overlay.querySelector("#aaResourceHint");
+    const addBtn = overlay.querySelector("#aaAdd");
+
+    // Item 3, second placement: the same role-fill counts shown above the
+    // Allocations table also appear here, live, as context while picking
+    // who to add — arguably the more useful of the two spots, since it's
+    // exactly the moment the number matters.
+    function paintRoles() {
+      const p = getProject(projectSel.value);
+      rolesBox.innerHTML = p
+        ? `<div><b>${esc(p.name)} — resources planned per role</b></div><div class="role-fill-row">${roleFillChipsHtml(p)}</div>`
+        : "";
     }
+
+    // Groups resources into "matches one of this project's required
+    // roles" (sorted to the top, via its own <optgroup>) vs. everyone
+    // else — a plain, native <select> is enough for this; nothing here
+    // removes any resource from the list or pre-selects one.
+    function paintResourceOptions() {
+      const p = getProject(projectSel.value);
+      const reqRoles = new Set(p ? Object.entries(p.roles || {}).filter(([, v]) => num(v, 0) > 0).map(([r]) => r) : []);
+      const matched = [];
+      const others = [];
+      resourcesSorted.forEach((r) => (reqRoles.has(r.role) ? matched : others).push(r));
+      const optHtml = (list) => list.map((r) => `<option value="${r.id}">${esc(r.name)} — ${esc(r.role || "No role")}</option>`).join("");
+      resourceSel.innerHTML = `<option value="">Select a resource…</option>`
+        + (matched.length ? `<optgroup label="★ Matches this project's required roles">${optHtml(matched)}</optgroup>` : "")
+        + `<optgroup label="${matched.length ? "Other resources" : "All resources"}">${optHtml(others)}</optgroup>`;
+      resourceSel.value = ""; // never carries a resource choice across a project change
+    }
+
+    function updateHint() {
+      const r = getResource(resourceSel.value);
+      const p = getProject(projectSel.value);
+      if (!r) { hintBox.textContent = ""; return; }
+      const reqPct = p ? num((p.roles || {})[r.role], 0) : 0;
+      hintBox.textContent = reqPct > 0
+        ? `✓ ${r.name} is a ${r.role} — matches this project's required role (${reqPct}% required).`
+        : `${r.name} is a ${r.role}${p ? " — not one of this project's listed required roles, but you can still assign them." : "."}`;
+    }
+
+    function updateAddEnabled() { addBtn.disabled = !(projectSel.value && resourceSel.value); }
+
+    projectSel.addEventListener("change", () => {
+      paintRoles();
+      paintResourceOptions();
+      updateHint();
+      updateAddEnabled();
+    });
+    resourceSel.addEventListener("change", () => {
+      updateHint();
+      updateAddEnabled();
+    });
+
+    paintRoles();
+    paintResourceOptions();
+    updateHint();
+    updateAddEnabled();
+
+    function close() { overlay.remove(); }
+    overlay.querySelector("#aaCancel").addEventListener("click", close);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+    addBtn.addEventListener("click", async () => {
+      const projectId = projectSel.value;
+      const resourceId = resourceSel.value;
+      if (!projectId || !resourceId) return; // belt-and-braces — button is disabled until both are set
+      const pct = clampPct(overlay.querySelector("#aaPct").value);
+      addBtn.disabled = true;
+      try {
+        const months = new Array(12).fill(pct);
+        const a = await apiPost("/allocations", { resourceId, projectId, months });
+        STATE.allocations.push(a);
+        close();
+        await refreshDataTabCaches();
+        revealAllocationRow(a.id);
+      } catch (err) {
+        alert("Couldn't add this assignment: " + err.message);
+        addBtn.disabled = false;
+      }
+    });
   }
   async function deleteResource(id) {
     const r = getResource(id);

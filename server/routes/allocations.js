@@ -25,17 +25,43 @@ async function persist(a) {
 }
 
 router.post("/", async (req, res) => {
-  const firstResource = await db.get("SELECT id FROM resources ORDER BY name LIMIT 1");
-  const firstProject = await db.get("SELECT id FROM projects ORDER BY name LIMIT 1");
-  if (!firstResource || !firstProject) return res.status(400).json({ error: "Add at least one resource and one project first." });
+  // The "Add assignment" modal (public/app.js) always sends an explicit
+  // resourceId + projectId the user picked — this is what actually fixes
+  // the "adding a new row doesn't seem to do anything" bug: the OLD
+  // behaviour (always defaulting to whichever resource/project sorts first
+  // alphabetically) silently created a row for a resource×project pair
+  // that, in practice, almost never matched whatever the Allocations
+  // table's own Resource/Project filter was currently set to — so the row
+  // WAS added (and persisted), but immediately filtered out of view with
+  // no error and no visual change, which is indistinguishable from "did
+  // nothing" to a user with a filter active. See revealAllocationRow() in
+  // app.js for the client-side half of this fix (it also clears any
+  // now-conflicting filter so the new row is guaranteed visible).
+  //
+  // resourceId/projectId are still optional and fall back to the old
+  // alphabetically-first behaviour if omitted, for back-compat with any
+  // other caller.
+  const { resourceId, projectId, months: monthsBody } = req.body || {};
+  let resource = resourceId ? await db.get("SELECT id FROM resources WHERE id = $1", [resourceId]) : null;
+  let project = projectId ? await db.get("SELECT id FROM projects WHERE id = $1", [projectId]) : null;
+  if (!resource) resource = await db.get("SELECT id FROM resources ORDER BY name LIMIT 1");
+  if (!project) project = await db.get("SELECT id FROM projects ORDER BY name LIMIT 1");
+  if (!resource || !project) return res.status(400).json({ error: "Add at least one resource and one project first." });
+
   const id = "a_" + crypto.randomBytes(8).toString("hex");
   const now = new Date().toISOString();
-  const months = new Array(12).fill(0);
+  let months = new Array(12).fill(0);
+  if (Array.isArray(monthsBody) && monthsBody.length === 12) {
+    months = monthsBody.map((v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+    });
+  }
   await db.run(
     `INSERT INTO allocations (id, resource_id, project_id, months, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-    [id, firstResource.id, firstProject.id, JSON.stringify(months), now, now]
+    [id, resource.id, project.id, JSON.stringify(months), now, now]
   );
-  await logAudit({ action: "create", entity: "allocation", entityId: id, entityName: `${await resourceName(firstResource.id)} × ${await projectName(firstProject.id)}`, userEmail: req.user.email, userName: req.user.displayName });
+  await logAudit({ action: "create", entity: "allocation", entityId: id, entityName: `${await resourceName(resource.id)} × ${await projectName(project.id)}`, userEmail: req.user.email, userName: req.user.displayName });
   res.json(rowToAllocation(await db.get("SELECT * FROM allocations WHERE id = $1", [id])));
 });
 
